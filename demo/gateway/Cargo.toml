@@ -1,0 +1,22 @@
+[package]
+name = "demo-gateway"
+version = "0.1.0"
+edition = "2021"
+description = "PoSq × Lighter integration demo: embedded sequencer, lighter-sim adapter, dashboard gateway, Sepolia poster"
+
+[dependencies]
+sequencer = { path = "../../crates/sequencer" }
+vdf = { path = "../../crates/vdf" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+num-bigint = { workspace = true }
+serde_json = "1"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+hex = "0.4"
+rand = "0.8"
+futures = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
+tracing-subscriber = "0.3"

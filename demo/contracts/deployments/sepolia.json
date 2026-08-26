@@ -1,0 +1,12 @@
+{
+  "bigMulMod": "0xEBB70b5945D5112394323b7cb1d332Fc4b486480",
+  "chainId": 11155111,
+  "epoch": 0,
+  "lighterBridgeDemo": "0xAD000Ff52DD15d38b6580d04a860e355e918EA5e",
+  "mainBondWei": 10000000000000000,
+  "maliciousSequencer": "0xd51164086dD9Af0706a59ea98C723b8A354D3FbB",
+  "poSqHostMain": "0xc9ec12bda232160fa9d6cadE81C37357dA6d0809",
+  "poSqHostSacrificial": "0xf1cD3a61CF82C6D09eB3Aefa0d4F15b98BEe8714",
+  "sacrificialBondWei": 5000000000000000,
+  "sequencer": "0x1220D3518a79895965D5fab43d5A098Cf3F91D82"
+}

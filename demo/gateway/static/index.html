@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PoSq × Lighter — self-verifying demo</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="vendor/crypto.js"></script>
+    <script src="verify.js"></script>
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">PoSq × Lighter</span>
+        <span class="tagline">don't trust this page — it re-derives everything in your browser</span>
+      </div>
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="dashboard">Dashboard</button>
+        <button class="tab" data-tab="about">About</button>
+      </nav>
+      <div class="topmeta">
+        <span class="tm">sequencer key <span id="seq-addr"></span></span>
+        <span class="tm">namespace <span id="namespace">—</span></span>
+        <span id="conn" class="conn poll">● connecting</span>
+      </div>
+    </header>
+
+    <div id="boot-error" class="boot-error"></div>
+
+    <!-- ================= Dashboard view ================= -->
+    <div id="view-dashboard">
+      <div class="params-bar">
+        <div id="params-grid" class="params-grid"></div>
+      </div>
+
+      <main class="grid">
+        <!-- Panel 2 (featured) -->
+        <section id="panel-admission" class="panel">
+          <h2 class="panel-head"><span class="ph-title">2 · Blind admission</span><span class="ph-summary" id="sum-admission"></span><span class="ph-toggle">▾</span></h2>
+          <div class="panel-body">
+            <div class="sub-title">Envelope inspector</div>
+            <div id="env-inspector" class="env-inspector"></div>
+            <div class="chart-block">
+              <div class="chart-title">receipt-latency histogram (µs)</div>
+              <div id="lat-hist" class="hist-host"></div>
+              <div id="lat-stats" class="muted small"></div>
+            </div>
+            <div class="list-head"><span>admission outcomes — each a signed object, verified in-browser</span><span id="admit-count" class="count"></span></div>
+            <div id="admit-list" class="scroll-list"></div>
+          </div>
+        </section>
+
+        <!-- Panel 4 (featured) -->
+        <section id="panel-ethereum" class="panel">
+          <h2 class="panel-head"><span class="ph-title">4 · Ethereum (Sepolia)</span><span class="ph-summary" id="sum-ethereum"></span><span class="ph-toggle">▾</span></h2>
+          <div class="panel-body">
+            <div id="eth-config" class="eth-config"></div>
+            <div id="eth-summary" class="eth-summary"></div>
+            <div id="eth-anchors" class="eth-block"></div>
+            <div id="eth-forced" class="eth-block"></div>
+            <div id="eth-fraud" class="eth-block"></div>
+            <div class="list-head"><span>local anchor log — full submitAnchor calldata, signature recovered in-browser</span><span id="anchors-count" class="count"></span></div>
+            <div id="anchors-local" class="scroll-list"></div>
+          </div>
+        </section>
+
+        <!-- Panel 3 (featured) -->
+        <section id="panel-lighter" class="panel wide">
+          <h2 class="panel-head"><span class="ph-title">3 · Tape → Lighter</span><span class="ph-summary" id="sum-lighter"></span><span class="ph-toggle">▾</span></h2>
+          <div class="panel-body">
+            <div class="two-col">
+              <div>
+                <div class="sub-title">Order book — per-side nonces are Lighter's priority (whitepaper §3.7.1)</div>
+                <div id="book-meta" class="muted small"></div>
+                <div class="book">
+                  <div id="book-asks" class="book-side asks"></div>
+                  <div class="book-mid">spread</div>
+                  <div id="book-bids" class="book-side bids"></div>
+                </div>
+              </div>
+              <div>
+                <div class="sub-title">Stream commitment — recomputed in-browser, matched to posted s_n</div>
+                <div id="stream-verify" class="stream-verify"></div>
+                <div class="list-head"><span>sealed ticks — record sig + merkle batch_root</span><span id="ticks-count" class="count"></span></div>
+                <div id="ticks-list" class="scroll-list"></div>
+              </div>
+            </div>
+            <div class="list-head"><span>(t,j) ↔ (block, txIndex) map — gaps preserved</span><span id="map-count" class="count"></span></div>
+            <div id="map-list" class="scroll-list map"></div>
+          </div>
+        </section>
+
+        <!-- Panel 5 (featured) -->
+        <section id="panel-scenarios" class="panel wide">
+          <h2 class="panel-head"><span class="ph-title">5 · Scenarios</span><span class="ph-summary" id="sum-scenarios"></span><span class="ph-toggle">▾</span></h2>
+          <div class="panel-body">
+            <div id="scenario-buttons" class="scenario-buttons"></div>
+            <div id="scenario-result" class="scenario-result"></div>
+            <div class="list-head"><span>scenario log</span><span id="scenlog-count" class="count"></span></div>
+            <div id="scenario-log" class="scroll-list"></div>
+          </div>
+        </section>
+
+        <!-- Panel 1 (collapsed by default) -->
+        <section id="panel-clock" class="panel wide">
+          <h2 class="panel-head"><span class="ph-title">1 · Clock &amp; tape</span><span class="ph-summary" id="sum-clock"></span><span class="ph-toggle">▾</span></h2>
+          <div class="panel-body">
+            <div class="tiles">
+              <div class="tile"><span class="t-label">tick</span><span id="k-tick" class="t-val">—</span></div>
+              <div class="tile"><span class="t-label">segment</span><span id="k-segment" class="t-val">—</span></div>
+              <div class="tile"><span class="t-label">epoch</span><span id="k-epoch" class="t-val">—</span></div>
+              <div class="tile"><span class="t-label">admitted</span><span id="k-admitted" class="t-val">—</span></div>
+              <div class="tile"><span class="t-label">opened</span><span id="k-opened" class="t-val">—</span></div>
+              <div class="tile"><span class="t-label">tape gaps</span><span id="k-gaps" class="t-val">—</span></div>
+              <div class="tile"><span class="t-label">cadence</span><span id="k-cadence" class="t-val">—</span></div>
+            </div>
+            <div class="chart-block">
+              <div class="chart-title">tick cadence — ticks/sec (each tick ≈ Δ, VDF-paced)</div>
+              <div id="cadence-spark" class="spark-host"></div>
+            </div>
+            <div id="seg-status" class="seg-status"></div>
+            <div class="list-head"><span>segment seals — full Wesolowski VDF proof, verified in-browser</span><span id="seg-count" class="count"></span></div>
+            <div id="seg-list" class="scroll-list segs"></div>
+            <div class="list-head"><span>raw tape — (t,j): pending → opened / gap:&lt;reason&gt;</span><span id="tape-count" class="count"></span></div>
+            <div id="tape-list" class="scroll-list tape"></div>
+          </div>
+        </section>
+
+        <!-- Panel 6 (collapsed by default) -->
+        <section id="panel-scorecard" class="panel wide">
+          <h2 class="panel-head"><span class="ph-title">6 · Scorecard — who supplies what</span><span class="ph-summary" id="sum-scorecard"></span><span class="ph-toggle">▾</span></h2>
+          <div class="panel-body">
+            <div class="sc-head">
+              <div class="sc-obj">PoSq object</div>
+              <div class="sc-supplies">Role in the integration</div>
+              <div class="sc-ev">Live evidence</div>
+            </div>
+            <div id="scorecard" class="scorecard"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- ================= About view ================= -->
+    <div id="view-about" class="about" hidden>
+      <div class="about-inner">
+        <h1>What you are looking at</h1>
+        <p>
+          A <strong>live PoSq sequencer</strong> integrated with a Lighter-style exchange, plus the
+          Sepolia contracts that hold it accountable. Everything on the Dashboard tab is a real
+          protocol object emitted by the running node — nothing is mocked — and every claim is
+          backed by a re-derivation <em>your browser performs</em> or a Sepolia transaction you can
+          open on Etherscan.
+        </p>
+        <h3>PoSq in one paragraph</h3>
+        <p>
+          PoSq is VDF-paced blind FIFO sequencing. Time is a chain of <em>ticks</em>, each ≈Δ of
+          wall clock, produced by sequential RSA-2048 squarings — the operator cannot fake the
+          passage of time, and every 256-tick <em>segment</em> seals with a Wesolowski proof that
+          the squarings actually happened. Users submit <em>envelopes</em>: a 39-byte visible
+          routing header plus a timelock-encrypted body, so the operator provably
+          <strong>cannot see order contents before fixing their position</strong> in the queue.
+          Every submission gets a signed answer — a receipt fixing position (t,j), a signed
+          rejection with a reason, or a signed full-window — so "my order vanished" is impossible
+          by construction; each signed object is slashable against an on-chain bond.
+        </p>
+        <h3>What the integration gives Lighter</h3>
+        <p>
+          Lighter proves <em>execution</em> in SNARKs but its sequencer still picks the transaction
+          order unverifiably. Because Lighter's time priority is the per-side order nonce —
+          assigned in execution order — <strong>every fairness property reduces to one equality:
+          the batch's transaction stream equals the opened prefix of the PoSq tape</strong>. Bind
+          that (the stream commitment you see recomputed in panel 3) and Lighter transitively
+          inherits: fair ordering (front-running dead), cancel priority (stale-quote sniping
+          dead), accountable admission, and on-chain fraud proofs with real slashing.
+        </p>
+
+        <h2>How to read this page</h2>
+        <ul>
+          <li>
+            <strong>✓ verified in-browser</strong> badges mean the object was re-derived from raw
+            bytes <em>in your browser</em> by <code>vendor/crypto.js</code> (dependency-free, view
+            source): secp256k1 signature recovery → sequencer address, keccak digest-chain links,
+            merkle batch roots, stream commitments, envelope-byte → commitment binding, and the
+            <strong>full Wesolowski VDF verification</strong> (challenge re-derivation + the
+            2048-bit equation pi<sup>l</sup>·y<sup>r</sup> ≡ x_end mod N). Click a badge to see
+            exactly what was checked; ✗ shows the diff.
+          </li>
+          <li>
+            <strong>Etherscan links (↗)</strong> open the real Sepolia transaction or contract.
+            The page itself reads chain state via JSON-RPC directly from your browser — the
+            gateway is not in that loop.
+          </li>
+          <li>
+            The tagline is literal: the server could lie, and the page would show ✗. Verification
+            code and this page are static files you can audit.
+          </li>
+        </ul>
+
+        <h2>Guided tour (5 minutes)</h2>
+        <ol class="tour">
+          <li>
+            <a href="#" class="goto" data-goto="panel-scenarios">Open panel 5 · Scenarios</a> and
+            click the six buttons — each is a scripted, deterministic demonstration:
+            <ul>
+              <li><strong>Front-run fails</strong> — same flow under blind FIFO vs plaintext FCFS; the victim's fill is strictly better blind.</li>
+              <li><strong>Cancel priority</strong> — a maker's cancel races a sniper through the blind queue and wins; nothing sniped.</li>
+              <li><strong>Accountable admission</strong> — a forced rejection comes back as a signed object your browser verifies.</li>
+              <li><strong>Fraud + slash</strong> — a fabricated reorder yields ready-to-submit proveReorder calldata (already fired once for real — see the sacrificial host below).</li>
+              <li><strong>Forced inclusion</strong> — censorship resistance as a slashing condition, not a freeze trigger.</li>
+              <li><strong>Stream mismatch</strong> — flip one payload byte and the stream commitment diverges; any batch ≠ tape is detectable.</li>
+            </ul>
+          </li>
+          <li>
+            <a href="#" class="goto" data-goto="panel-admission">Watch panel 2 · Blind admission</a>:
+            live envelopes with the real submitted bytes — visible header decoded, ciphertext
+            opaque, then what it opened to — and every outcome's signature recovered live.
+          </li>
+          <li>
+            <a href="#" class="goto" data-goto="panel-lighter">Expand a block in panel 3 · Tape → Lighter</a>:
+            the (t,j) ↔ (block, txIndex) map with gaps preserved, order-book nonces (Lighter's
+            actual priority mechanism), and the stream commitment recomputed step by step.
+          </li>
+          <li>
+            <a href="#" class="goto" data-goto="panel-ethereum">Check panel 4 · Ethereum</a>: the
+            main PoSqHost holds a live bond and accumulates anchors every ~30 minutes; the
+            <strong>sacrificial host is already slashed</strong> — bond 0, RESCUE mode, a real
+            FraudProven event from a submitted proveReorder — while the main host stays healthy.
+          </li>
+        </ol>
+
+        <h2>Deployed contracts (Sepolia)</h2>
+        <div class="tbl-wrap">
+          <table class="contract-table">
+            <thead><tr><th>Contract</th><th>Address</th><th>Role</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>PoSqHost (main)</td>
+                <td><a href="https://sepolia.etherscan.io/address/0xc9ec12bda232160fa9d6cadE81C37357dA6d0809" target="_blank" class="mono">0xc9ec12bda232160fa9d6cadE81C37357dA6d0809 ↗</a></td>
+                <td>bond, anchors, fraud proofs, native Wesolowski verification, forced-inclusion queue</td>
+              </tr>
+              <tr>
+                <td>LighterBridgeDemo</td>
+                <td><a href="https://sepolia.etherscan.io/address/0xAD000Ff52DD15d38b6580d04a860e355e918EA5e" target="_blank" class="mono">0xAD000Ff52DD15d38b6580d04a860e355e918EA5e ↗</a></td>
+                <td>binds Lighter batch spans to PoSqHost anchors + stream commitments (B1/B2)</td>
+              </tr>
+              <tr>
+                <td>PoSqHost (sacrificial)</td>
+                <td><a href="https://sepolia.etherscan.io/address/0xf1cD3a61CF82C6D09eB3Aefa0d4F15b98BEe8714" target="_blank" class="mono">0xf1cD3a61CF82C6D09eB3Aefa0d4F15b98BEe8714 ↗</a></td>
+                <td>same code, malicious sequencer key — <strong>bond slashed to 0 by a real proveReorder</strong>, rescueMode = true</td>
+              </tr>
+              <tr>
+                <td>BigMulMod</td>
+                <td><a href="https://sepolia.etherscan.io/address/0xEBB70b5945D5112394323b7cb1d332Fc4b486480" target="_blank" class="mono">0xEBB70b5945D5112394323b7cb1d332Fc4b486480 ↗</a></td>
+                <td>2048-bit modular multiplication in Yul (no EVM precompile exists) — the piece that makes native Wesolowski verification possible</td>
+              </tr>
+              <tr>
+                <td>Anchor poster (EOA)</td>
+                <td><a href="https://sepolia.etherscan.io/address/0x60eB5b83B1B46537C66B7f2Bb610468E73090C5b" target="_blank" class="mono">0x60eB5b83B1B46537C66B7f2Bb610468E73090C5b ↗</a></td>
+                <td>submits anchors / spans on a ~30-minute cadence</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Verify it yourself, off this page</h3>
+        <p class="muted">
+          Pull a live segment seal from the API and hand it to the contract — Ethereum verifies the
+          same VDF proof this page verifies in your browser:
+        </p>
+        <pre class="plain-json snippet">Q=$(curl -s 'http://35.204.78.82:8088/api/segments?limit=1')
+Y=$(echo $Q | jq -r '.[0].y');  XE=$(echo $Q | jq -r '.[0].x_end')
+PI=$(echo $Q | jq -r '.[0].pi'); T=$(echo $Q | jq -r '.[0].t'); L=$(echo $Q | jq -r '.[0].l')
+
+cast call 0xc9ec12bda232160fa9d6cadE81C37357dA6d0809 \
+  "verifySegmentProof(bytes,bytes,bytes,uint64,uint256)(bool)" \
+  $Y $XE $PI $T $L \
+  --rpc-url https://ethereum-sepolia-rpc.publicnode.com
+# → true</pre>
+
+        <h2>Glossary</h2>
+        <dl class="glossary">
+          <dt>tick</dt><dd>the atomic time unit: q sequential RSA squarings ≈ Δ of wall clock. Positions in a tick are (t, j).</dd>
+          <dt>segment</dt><dd>a fixed run of ticks (256 on this deployment), sealed with a Wesolowski proof that the squarings were performed — the auditable clock.</dd>
+          <dt>envelope</dt><dd>the fixed-size (1024 B) submission: 39-byte visible routing header (bucket, namespace, window, delay class, nonce) + timelock-encrypted body. All ops look identical on the wire.</dd>
+          <dt>receipt</dt><dd>the signed admission ack fixing (t, j) for commitment h, digest-chained to every prior admission. Slashable.</dd>
+          <dt>tape</dt><dd>the totally-ordered sequence of admitted positions and their outcomes: pending → opened / gap. The adapter consumes it strictly in order.</dd>
+          <dt>gap</dt><dd>a consumed position with no executable payload (undecryptable, invalid, or unopened by cutoff). Permanent, visible, attributable — never silently reused.</dd>
+          <dt>stream commitment</dt><dd>s_n = fold of keccak over opened payloads in (t, j) order. The single value that binds a Lighter batch to the tape (challenge-able on the bridge).</dd>
+          <dt>anchor</dt><dd>periodic checkpoint (segment span, log head, receipts root, segment x_end hashes) signed and posted to PoSqHost.</dd>
+          <dt>fraud proof</dt><dd>on-chain proof of reorder / omission / equivocation / invalid log / forced default → bond slashed, RescueMode, challenger bounty.</dd>
+          <dt>forced inclusion</dt><dd>forceInclude(h) on-chain → the sequencer must exhibit a receipt within F_force ticks or be slashed (proveForcedDefault).</dd>
+        </dl>
+
+        <p class="muted small">
+          Spec: <code>integrations-v2/lighter-integration.md</code> · gateway crate:
+          <code>demo/gateway</code> · contracts: <code>demo/contracts</code> · verification code:
+          <code>static/vendor/crypto.js</code> + <code>static/verify.js</code> (this page, view source).
+        </p>
+      </div>
+    </div>
+
+    <footer class="foot">
+      Embedded real PoSq sequencer · lighter-sim adapter (R1–R7) · every badge is a
+      client-side re-derivation (secp256k1 recover · keccak hash-links · merkle
+      roots · stream commitments · Wesolowski VDF) or a Sepolia read/link. Nothing on
+      this page is trusted from the server.
+    </footer>
+  </body>
+</html>

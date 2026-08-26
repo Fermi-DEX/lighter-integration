@@ -1,0 +1,23 @@
+{
+  "_schema": {
+    "description": "One real PoSq Wesolowski segment proof, consumed by test/PoSqHostSegmentProof.t.sol and reproducible via gen_segment_vector.py. All group elements are 256-byte big-endian, 0x-prefixed. Field names map to PoSqHost.verifySegmentProof params.",
+    "domain": "PoSqHost SEGMENT_DOMAIN string (posq-segment-proof-v1)",
+    "N": "RSA-2048 modulus (crates/vdf/src/backend.rs, Group::default_rsa2048())",
+    "y_base": "verifySegmentProof param `y`  \u2014 the segment base x_s (a QR_N element)",
+    "xEnd_output": "verifySegmentProof param `xEnd` \u2014 the segment output y_s = base^(2^t) mod N",
+    "pi": "verifySegmentProof param `pi` \u2014 Wesolowski proof = base^floor(2^t / l) mod N",
+    "t": "verifySegmentProof param `t` \u2014 number of squarings = q_squarings * segment_ticks",
+    "l": "verifySegmentProof param `l` \u2014 challenge prime (decimal), the first prime >= sha256(preimage)",
+    "identity": "pi^l * y_base^(2^t mod l) == xEnd (mod N)"
+  },
+  "domain": "posq-segment-proof-v1",
+  "q_squarings": 3600,
+  "segment_ticks": 256,
+  "t": 921600,
+  "N": "0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5",
+  "y_base": "0xad73a489f828a483a1dad093d25950bccb17c0efef657f6a89178cb6ee6aa6dc6c4b9362cae7c657897d77396016ca00cbbeb2a4a9bc4d9ccfc1ec1dcc7cd0357d6abe7147001b7f29cf5d763aacd5add1b4d54ed0710bc9e64a7e2c0470858628bff8737626eb9855a2fea6f28703508f32edae969b522ea29d0e3c344d54a97fbbbe1590a480ca8e0f8503e854e21b9c0f4488f5757946f5c091c94b0e6dee9a90a86e1a1f6e151bc560e181216def923b0e6a0a1d204a73ed612d9060eb71242fe2218c1f5a726ddb7312fd341444af375ce1d04ef106beca5157f5d4955e98dd4622637d480da7531e6f8cc49e8aee25df768414e411c2db667cda1bdd20",
+  "xEnd_output": "0x6f3c281607f3db98f19763ab61a6d59b6b7a9008b3ba909209457804b871a95e060398e0e6c60d856caf15d42f3f057c020f041501ac47c95836001329b188668fc4f288caed210fda3234a05e823ed52fe29b7b5bd47f10d35fb3b9a6171940311282233af75a2ec96396d59f76a1993c86dc23164f44b2a5f929856a73667d2debcaa1e8e6972ea8384b641689c71d3b1e78b1f5e5efbbab0752601807a42b6715a3ddda3dc9e54fdf4a16c12fd85616571ab2945dc14b436eea35945e1d9669d46fb048e827111e5e1aacc32a3e00fb9dc732a4c5068494683cc20d1d9eb04cc1d009b18a08f6a5d8086cf6f867b8ed03165b10cd6cb3f7a0125179e96f86",
+  "pi": "0x279a0a96936cda255d4d24b5accb4d65733dd8005c16b1d6c4f5829089de050049d46506c5418dc19ab6c9dfd504bf25d1cc13eeffc5e1b156cdd3b6b5a76b255bb64414919038a207d9daeb305bc8d4e90d0e58e9b7396c6baed9fdfab878e45a8aa66633c958385244051785501b7d605650e5d0fa639424c15ff4b38b86d2eeeaf58344fd367e09086be2a97d6123c36f1e5934ac6d9a4244d4902f5c459e0605647879c588cf94e1dbde5d1d7e1c2537e92851d2ca2798c29049c2ba6b8a2270a8c4ed5caf2068fdfb316b280e10cc28d2903b4ecf9ef7275e7e327787d9a0dfca5e75606e35ab494d1587971dac792a7e28b204684a44a7f1228350796f",
+  "l": "27476621318705965149262356369381636172493059745746019279902291047853592748763",
+  "l_minus_challenge": 253
+}

@@ -1,0 +1,15 @@
+[package]
+name = "continuum-lighter-plugin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Reference binding layer between Continuum sequence validity and Lighter execution validity"
+
+[features]
+default = []
+lighter-poseidon2 = ["dep:plonky2"]
+
+[dependencies]
+serde = { workspace = true }
+sha2 = { workspace = true }
+plonky2 = { git = "https://github.com/elliottech/plonky2", rev = "e1c2d35450948b88fca6a7e69e2643c3ecad3caa", package = "plonky2", optional = true }

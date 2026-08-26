@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Plugin tests
+        run: cargo test -p continuum-lighter-plugin
+      - name: Demo and runtime tests
+        run: cargo test -p demo-gateway -p sequencer -p vdf
+
+  lighter-native-hash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-06
+      - name: Exact pinned Poseidon2 adapter tests
+        run: cargo test -p continuum-lighter-plugin --features lighter-poseidon2
+
+  pinned-lighter-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone pinned Lighter prover
+        run: |
+          git clone https://github.com/elliottech/lighter-prover.git /tmp/lighter-prover
+          git -C /tmp/lighter-prover checkout 8c01ea010d6fd46bdb77ef2f93a79278d1adf0df
+      - name: Check and apply overlay
+        run: |
+          git -C /tmp/lighter-prover apply --check "$GITHUB_WORKSPACE/patches/lighter-prover/0001-continuum-execution-accumulator.patch"
+          git -C /tmp/lighter-prover apply "$GITHUB_WORKSPACE/patches/lighter-prover/0001-continuum-execution-accumulator.patch"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-06
+      - name: Compile and run accumulator tests
+        working-directory: /tmp/lighter-prover
+        run: cargo test -p circuit continuum --lib
+
+  solidity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: Demo contracts
+        working-directory: demo/contracts
+        run: forge test
+      - name: Production join scaffold
+        working-directory: contracts/production
+        run: forge test

@@ -1,0 +1,21 @@
+# Source revisions used by this extraction and audit.
+# Update only with a new differential-review and vector run.
+
+[continuum]
+repository = "https://github.com/cryptohariseldon/continuum-monorepo"
+production_core_commit = "83dd6edef062157df250462045aad9fc927d4c7a"
+demo_commit = "9418a528f09b44cc6705658028f347bf921a9074"
+demo_base_commit = "60501a9"
+
+[lighter_prover]
+repository = "https://github.com/elliottech/lighter-prover"
+commit = "8c01ea010d6fd46bdb77ef2f93a79278d1adf0df"
+license = "BUSL-1.1"
+
+[lighter_contracts]
+repository = "https://github.com/elliottech/lighter-contracts"
+commit = "e918b1c717776de10640f822edeeb7245f85858a"
+
+[lighter_plonky2]
+repository = "https://github.com/elliottech/plonky2"
+commit = "e1c2d35450948b88fca6a7e69e2643c3ecad3caa"

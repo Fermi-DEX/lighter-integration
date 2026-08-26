@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package continuum.sequencer.v2;
+
+// PoSq sequencing service (2026 whitepaper MVD).
+//
+// Complex cryptographic objects (timelock parameters, anchors, tickets)
+// travel as bincode-serialized bytes of the Rust structs; the commonly
+// consumed fields are mirrored as explicit scalars.
+service PosqSequencer {
+  // Public parameters: group modulus, timelock setup, sequencer address.
+  rpc GetInfo(Empty) returns (Info);
+
+  // Dev ticket faucet (economics stubbed; see docs3/05).
+  rpc MintTicket(MintTicketRequest) returns (TicketMsg);
+
+  // Submit a fixed-size envelope. Exactly one accountable response.
+  rpc SubmitEnvelope(SubmitEnvelopeRequest) returns (AdmissionResponse);
+
+  rpc GetStatus(Empty) returns (Status);
+
+  // Signed tick records R_t, live.
+  rpc StreamTickRecords(Empty) returns (stream TickRecordMsg);
+
+  // Canonical tape entries as outcomes resolve.
+  rpc StreamTape(Empty) returns (stream TapeEntryMsg);
+
+  // Anchors built so far (bincode of anchor::Anchor).
+  rpc ListAnchors(Empty) returns (AnchorList);
+}
+
+message Empty {}
+
+message Info {
+  uint64 epoch = 1;
+  bytes sequencer_address = 2; // 20 bytes
+  uint64 q_squarings = 3;
+  uint64 segment_ticks = 4;
+  uint32 window_ticks = 5;
+  uint64 delta_micros = 6;
+  uint32 envelope_bytes = 7;
+  repeated uint64 delay_classes = 8; // T_k in squarings
+  // bincode of vdf::tlk::TlkParams (modulus, g, h_k, proofs).
+  bytes tlk_params = 9;
+  bytes ticket_issuer_address = 10; // 20 bytes
+}
+
+message MintTicketRequest {
+  uint32 denomination = 1; // == delay class
+  uint32 bucket = 2;
+}
+
+message TicketMsg {
+  bytes ticket = 1; // bincode of envelope::Ticket
+}
+
+message SubmitEnvelopeRequest {
+  bytes envelope = 1; // exactly Info.envelope_bytes bytes
+}
+
+message AdmissionResponse {
+  oneof outcome {
+    ReceiptMsg receipt = 1;
+    RejectionMsg rejection = 2;
+    FullWindowMsg full_window = 3;
+  }
+}
+
+message ReceiptMsg {
+  uint64 epoch = 1;
+  uint64 tick = 2;
+  uint32 pos = 3;
+  bytes h = 4;
+  uint32 bucket = 5;
+  uint64 window_start = 6;
+  uint32 window_len = 7;
+  bytes ticket_id = 8;
+  bytes x_prev_hash = 9;
+  bytes c_prev = 10;
+  bytes d_prev = 11;
+  bytes d = 12;
+  bytes sig = 13; // 65 bytes, ecrecover-compatible
+}
+
+message RejectionMsg {
+  uint64 epoch = 1;
+  bytes h = 2;
+  uint32 bucket = 3;
+  uint64 window_start = 4;
+  uint32 window_len = 5;
+  uint32 reason = 6;
+  bytes c_latest = 7;
+  bytes sig = 8;
+}
+
+message FullWindowMsg {
+  uint64 epoch = 1;
+  uint32 bucket = 2;
+  uint64 window_start = 3;
+  uint32 window_len = 4;
+  uint32 capacity = 5;
+  bytes c_latest = 6;
+  bytes sig = 7;
+}
+
+message TickRecordMsg {
+  uint64 epoch = 1;
+  uint64 segment = 2;
+  uint64 tick = 3;
+  bytes x = 4; // big-endian group element
+  bytes c_prev = 5;
+  bytes c_t = 6;
+  bytes batch_root = 7;
+  bytes da_ref = 8;
+  bytes sig = 9;
+}
+
+message TapeEntryMsg {
+  uint64 tick = 1;
+  uint32 pos = 2;
+  bytes h = 3;
+  uint32 bucket = 4;
+  uint32 delay_class = 5;
+  // "pending" | "opened" | "gap:<reason>"
+  string outcome = 6;
+  // bincode of envelope::Intent when opened.
+  bytes intent = 7;
+  uint64 mature_at = 8;
+}
+
+message Status {
+  uint64 current_tick = 1;
+  uint64 current_segment = 2;
+  uint64 admitted = 3;
+  uint64 opened = 4;
+  uint64 gaps = 5;
+  repeated uint64 cadence_faults = 6;
+}
+
+message AnchorList {
+  repeated bytes anchors = 1; // bincode of anchor::Anchor
+}

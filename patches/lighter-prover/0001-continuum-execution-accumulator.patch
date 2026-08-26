@@ -1,0 +1,193 @@
+diff --git a/circuit/src/continuum.rs b/circuit/src/continuum.rs
+new file mode 100644
+index 0000000..7d295f9
+--- /dev/null
++++ b/circuit/src/continuum.rs
+@@ -0,0 +1,175 @@
++// Copyright (c) Elliot Technologies, Inc.
++// SPDX-License-Identifier: BUSL-1.1
++
++//! Continuum's compact, field-native execution stream accumulator.
++//!
++//! This module is deliberately independent of transaction dispatch. It gives
++//! the block transaction circuit a cheap accumulator step that can be threaded
++//! through `JumpState` without serializing the existing heavy and light paths.
++
++use plonky2::field::types::Field;
++use plonky2::hash::hash_types::{HashOut, HashOutTarget};
++use plonky2::iop::target::{BoolTarget, Target};
++use plonky2::plonk::config::Hasher;
++
++use crate::poseidon2::Poseidon2Hash;
++use crate::types::config::{Builder, F};
++use crate::uint::u32::gadgets::arithmetic_u32::{CircuitBuilderU32, U32Target};
++use crate::utils::CircuitBuilderUtils;
++
++const INIT_DOMAIN_WORDS: [u32; 8] = [
++    0x434f4e54, 0x494e5555, 0x4d5f4c49, 0x47485445, 0x525f4558, 0x45435f49, 0x4e49545f,
++    0x56335f31,
++];
++const STEP_DOMAIN_WORDS: [u32; 8] = [
++    0x434f4e54, 0x494e5555, 0x4d5f4c49, 0x47485445, 0x525f4558, 0x45435f53, 0x5445505f,
++    0x56335f31,
++];
++
++/// Values already present in Lighter's transaction circuit, plus the outcome
++/// class and explicit terminal no-op bit supplied by the Continuum selector.
++#[derive(Clone, Copy, Debug)]
++pub struct ExecutionItemTarget {
++    pub logical_index: Target,
++    pub tx_type: Target,
++    pub tx_hash: [Target; 5],
++    pub outcome_class: Target,
++    pub terminal_noop: BoolTarget,
++}
++
++#[derive(Clone, Copy, Debug)]
++pub struct ExecutionItem {
++    pub logical_index: u64,
++    pub tx_type: u16,
++    pub tx_hash: [F; 5],
++    pub outcome_class: u16,
++    pub terminal_noop: bool,
++}
++
++fn tagged_hash_target(
++    builder: &mut Builder,
++    domain_words: [u32; 8],
++    payload: Vec<Target>,
++) -> HashOutTarget {
++    let mut fields = Vec::with_capacity(10 + payload.len());
++    fields.push(builder.constant_u64(32));
++    fields.extend(
++        domain_words
++            .into_iter()
++            .map(|word| builder.constant_u64(word as u64)),
++    );
++    fields.push(builder.constant_u64(payload.len() as u64));
++    fields.extend(payload);
++    builder.hash_n_to_hash_no_pad::<Poseidon2Hash>(fields)
++}
++
++fn tagged_hash_native(domain_words: [u32; 8], payload: &[F]) -> HashOut<F> {
++    let mut fields = Vec::with_capacity(10 + payload.len());
++    fields.push(F::from_canonical_u64(32));
++    fields.extend(domain_words.map(|word| F::from_canonical_u32(word)));
++    fields.push(F::from_canonical_usize(payload.len()));
++    fields.extend_from_slice(payload);
++    Poseidon2Hash::hash_no_pad(&fields)
++}
++
++/// Initial root. `domain_hash_be` is eight 32-bit big-endian limbs so any
++/// 256-bit Continuum domain hash has a unique canonical field representation.
++pub fn execution_stream_init(
++    builder: &mut Builder,
++    domain_hash_be: [U32Target; 8],
++    start_cursor: Target,
++    item_count: Target,
++) -> HashOutTarget {
++    let [cursor_low, cursor_high] = builder.split_u64_to_u32s_le(start_cursor);
++    let [count_low, count_high] = builder.split_u64_to_u32s_le(item_count);
++    let mut payload = domain_hash_be.map(|limb| limb.0).to_vec();
++    payload.extend([cursor_high.0, cursor_low.0, count_high.0, count_low.0]);
++    tagged_hash_target(builder, INIT_DOMAIN_WORDS, payload)
++}
++
++/// Add one logical item. A terminal failure consumes an index and hashes a
++/// zero transaction type/hash; it never mutates Lighter state or API nonce.
++pub fn execution_stream_step(
++    builder: &mut Builder,
++    previous_root: HashOutTarget,
++    item: ExecutionItemTarget,
++) -> HashOutTarget {
++    builder.conditional_assert_zero(item.terminal_noop, item.tx_type);
++    for limb in item.tx_hash {
++        builder.conditional_assert_zero(item.terminal_noop, limb);
++    }
++
++    let [index_low, index_high] = builder.split_u64_to_u32s_le(item.logical_index);
++    let mut payload = previous_root.elements.to_vec();
++    payload.extend([index_high.0, index_low.0, item.tx_type]);
++    payload.extend(item.tx_hash);
++    payload.extend([item.outcome_class, item.terminal_noop.target]);
++    tagged_hash_target(builder, STEP_DOMAIN_WORDS, payload)
++}
++
++pub fn execution_stream_init_native(
++    domain_hash_be: [u32; 8],
++    start_cursor: u64,
++    item_count: u64,
++) -> HashOut<F> {
++    let mut payload = domain_hash_be.map(F::from_canonical_u32).to_vec();
++    payload.extend([
++        F::from_canonical_u32((start_cursor >> 32) as u32),
++        F::from_canonical_u32(start_cursor as u32),
++        F::from_canonical_u32((item_count >> 32) as u32),
++        F::from_canonical_u32(item_count as u32),
++    ]);
++    tagged_hash_native(INIT_DOMAIN_WORDS, &payload)
++}
++
++pub fn execution_stream_step_native(
++    previous_root: HashOut<F>,
++    item: ExecutionItem,
++) -> HashOut<F> {
++    assert!(!item.terminal_noop || (item.tx_type == 0 && item.tx_hash == [F::ZERO; 5]));
++    let mut payload = previous_root.elements.to_vec();
++    payload.extend([
++        F::from_canonical_u32((item.logical_index >> 32) as u32),
++        F::from_canonical_u32(item.logical_index as u32),
++        F::from_canonical_u16(item.tx_type),
++    ]);
++    payload.extend(item.tx_hash);
++    payload.extend([
++        F::from_canonical_u16(item.outcome_class),
++        F::from_bool(item.terminal_noop),
++    ]);
++    tagged_hash_native(STEP_DOMAIN_WORDS, &payload)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn order_and_terminal_items_are_bound() {
++        let root = execution_stream_init_native([7; 8], 11, 2);
++        let clear = ExecutionItem {
++            logical_index: 0,
++            tx_type: 1,
++            tx_hash: [F::ONE; 5],
++            outcome_class: 0,
++            terminal_noop: false,
++        };
++        let terminal = ExecutionItem {
++            logical_index: 1,
++            tx_type: 0,
++            tx_hash: [F::ZERO; 5],
++            outcome_class: 1,
++            terminal_noop: true,
++        };
++        let ordered = execution_stream_step_native(
++            execution_stream_step_native(root, clear),
++            terminal,
++        );
++        let reordered = execution_stream_step_native(
++            execution_stream_step_native(root, terminal),
++            clear,
++        );
++        assert_ne!(ordered, reordered);
++    }
++}
+diff --git a/circuit/src/lib.rs b/circuit/src/lib.rs
+index 253202e..8959710 100644
+--- a/circuit/src/lib.rs
++++ b/circuit/src/lib.rs
+@@ -44,6 +44,7 @@ pub mod byte;
+ pub mod circuit_logger;
+ pub mod circuit_serializer;
+ pub mod comparison;
++pub mod continuum;
+ pub mod delta;
+ pub mod deserializers;
+ pub mod ecdsa;

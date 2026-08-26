@@ -1,0 +1,36 @@
+# Self-contained run of the PoSq × Lighter demo.
+#
+#   cd demo && docker compose up
+#   → dashboard on http://localhost:8080
+#
+# Local-only by default (no Ethereum). To enable the Sepolia edge, deploy the
+# contracts (see contracts/README.md), then set the DEMO_POSQ_HOST / _BRIDGE /
+# _SACRIFICIAL env vars below and mount a funded key at demo/.sepolia-key.
+
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    image: posq-lighter-demo:latest
+    ports:
+      - "8080:8080"
+    environment:
+      DEMO_HTTP_ADDR: "0.0.0.0:8080"
+      DEMO_DELTA_US: "10000"
+      DEMO_SEGMENT_TICKS: "128"
+      DEMO_BLOCK_TICKS: "8"
+      DEMO_ANCHOR_EVERY: "4"
+      DEMO_WINDOW_TICKS: "12"
+      # --- Sepolia edge (optional) ---
+      # DEMO_ETH_RPC: "https://ethereum-sepolia-rpc.publicnode.com"
+      # DEMO_ETH_KEY_FILE: "/run/secrets/sepolia_key"
+      # DEMO_POSQ_HOST: "0x..."
+      # DEMO_POSQ_HOST_SACRIFICIAL: "0x..."
+      # DEMO_BRIDGE: "0x..."
+    # secrets:
+    #   - sepolia_key
+
+# secrets:
+#   sepolia_key:
+#     file: ./.sepolia-key
