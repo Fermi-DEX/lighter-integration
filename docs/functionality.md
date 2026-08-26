@@ -1,8 +1,14 @@
-# Full functionality
+# How the proof-backed Lighter integration works
 
-## System view
+## Problem and result
 
-The repository combines a runnable V1 bridge with the V3.1 production binding design. The runnable bridge explains behavior. The V3.1 components define the validity boundary.
+A sequencer can see a clear transaction before its execution position becomes binding. This timing can give the sequencer an ordering advantage.
+
+The proof-backed design changes this sequence of events. Continuum fixes the position of an encrypted Lighter transaction before public decryption.
+
+Lighter proves exchange state transitions. Continuum adds encrypted admission and a sequence proof before that execution.
+
+A sequence proof then binds that position to Lighter's execution proof. Atomic settlement advances both state heads or neither state head.
 
 ```mermaid
 flowchart TD
@@ -13,141 +19,116 @@ flowchart TD
     D --> F
 ```
 
-## Capability status
+## Main terms
 
-| Capability | Current repository | Production target |
-|---|---|---|
-| Demo bridge | Runnable V1 demonstration | Real proof-backed mode |
-| VDF and timelock | Functional V1 runtime snapshot | Latest Continuum core, ceremony modulus, and production capacity |
-| Timelock batching | Parallel solve chains and one aggregate proof | Amortized sequential work or a documented weaker profile |
-| Sequence relation | Host structural verifier | Recursive sequence SNARK |
-| Lighter accumulator | Tested native gadget and pinned overlay | Full heavy, light, block, recursion, wrapper, and blob wiring |
-| Atomic settlement | Rust relation and Solidity reference | Integration into Lighter's batch lifecycle |
-| Cross-system recursion | Design only | Optional measured optimization |
-| Data availability | Local content-addressed storage | Durable multi-provider production data availability |
-| Tests | Strong extracted team-test suite | Real Lighter witnesses and full proof-pipeline tests |
+| Term | Meaning |
+|---|---|
+| Protected transaction | A signed Lighter transaction inside a timelock envelope |
+| Receipt | A Continuum signature that fixes an admitted envelope in the protected stream |
+| Opening | Public evidence that exposes the envelope after the required sequential work |
+| Sequence proof | A proof that derives one complete ordered stream from linked receipts and openings |
+| Execution proof | A Lighter proof that applies the ordered stream to the Lighter state |
+| `C_bind` | A commitment to both ordered roots, their count, continuity values, and batch context |
+| Atomic join | A settlement rule that advances both state heads together |
 
-## 1. VDF and timelock kernel
+## 1. Signed and encrypted admission
 
-`crates/vdf/src/posq.rs` contains the core repeated-squaring implementation. It uses an RSA-2048 unknown-order group and fixed 256-byte group encodings.
+The user signs a normal Lighter transaction before encryption. This signature keeps Lighter's existing authorization model.
 
-The module provides domain-separated hash-to-group, tick advancement, streaming-quotient Wesolowski proofs, and proof verification. Tests reject altered outputs, domains, delays, and proofs.
+The client places the transaction in a fixed-size envelope. Canonical encoding and padding rules prevent different byte representations of the same logical input.
 
-`crates/vdf/src/tlk.rs` contains a solve-only timelock KEM. Delay-class setup adds no new secret.
+The solve-only timelock key-encapsulation mechanism (KEM) protects the envelope. ChaCha20-Poly1305 protects payload integrity and binds the associated data.
 
-Production still needs a ceremony-generated modulus with unknown factorization.
+Each encryption must use unique and high-entropy caller input. Reused or predictable entropy breaks the secrecy boundary.
 
-Encryption derives the final key from the delayed group result. ChaCha20-Poly1305 protects the payload and binds associated data.
+## 2. Receipt and fixed order
 
-Anyone can solve a ciphertext and publish an opening. Anyone can verify that opening before decrypting the payload.
+Continuum admits the encrypted envelope without its plaintext. It assigns the next protected position and signs a linked receipt.
 
-`crates/vdf/src/batch_solve.rs` solves one maturity wave. It runs each required sequential chain on a separate worker thread.
+The receipt binds the envelope commitment, its position, and transcript continuity. This signature makes the admitted position an accountable obligation.
 
-The module combines the ciphertext bases and solved outputs with 128-bit Fiat-Shamir scalars. It produces one aggregated Wesolowski proof for the wave.
+Receipt issuance must start the required timelock work for that position.
 
-This aggregation reduces proof count and verification work. It does not reduce the sequential solving work for each ciphertext.
+The protected guarantee starts after receipt issuance. The protocol does not prevent rejection or network censorship before that point.
 
-The default RSA-2048 modulus has challenge-modulus provenance. Production requires a pinned modulus from an accepted ceremony.
+## 3. Timed opening
 
-Fresh encryption also requires unique, high-entropy caller input. Reused or predictable entropy breaks the intended secrecy boundary.
+A verifiable delay function (VDF) proves that a defined amount of sequential computation occurred.
 
-## 2. Continuum sequencer runtime
+The delay relation uses repeated squaring in an RSA-2048 unknown-order group. Each group value has a fixed encoding of 256 bytes.
 
-`crates/sequencer` contains the V1 demo sequencer. It provides these functions:
+Domain-separated hash-to-group binds each VDF use. A streaming-quotient Wesolowski proof verifies the delayed result and its delay parameter.
 
-- Fixed-size envelope parsing and padding verification.
-- Development admission tickets and one-time ticket consumption.
-- Signed receipts, rejections, tick records, segment seals, and anchors.
-- Work-defined ticks and asynchronous Wesolowski segment proofs.
-- Durable local records and a local content-addressed data store.
-- Transcript replay verification and fraud-evidence data types.
-- A gRPC service, client, node supervisor, and test helpers.
+Anyone can solve a ciphertext and publish an opening. Anyone can verify the opening before they decrypt the payload.
 
-This runtime supports the self-contained demo. It differs from the V3.1 production target in several important ways.
+A batch solver executes each required sequential chain on a separate worker thread. It combines the outputs with 128-bit Fiat-Shamir scalars.
 
-The runtime starts timelock solving at maturity. V3.1 starts the required work at receipt time.
+The batch solver produces one aggregated Wesolowski proof for each wave. Aggregation reduces proof count and verification work, not sequential solving work.
 
-The V1 path can turn unavailable or invalid items into gaps. V3.1 stalls finality unless a proof establishes a typed terminal outcome.
+## 4. Sequence proof
 
-The local node creates its own wave solutions. It does not verify an adversarial external solver result before applying each witness.
+A production sequence proof must cover one contiguous transcript range. It must verify linked receipts, openings, data commitments, cursor continuity, counts, and duplicate rules.
 
-The replay prover emits an optimistic predicate commitment. It does not emit the recursive sequence SNARK required for production.
+Every protected position must resolve to a Lighter transaction or a proved terminal outcome. `BAD_AEAD` and `BAD_ENCODING` are protected terminal outcomes.
 
-The data store and entropy sources are suitable for a demo. They are not production data-availability or randomness systems.
+During priority-only recovery, a deterministic `L1_CANCELLED` no-op can resolve only the complete suffix that settlement froze at the fault deadline.
 
-## 3. Lighter integration plugin
+The V3.1 data model creates one rich `DerivedItemV3` leaf and one compact `ExecutionItemV3` leaf for each position.
 
-`crates/continuum-lighter-plugin` contains the standalone V3.1 reference API. It provides these functions:
+`ordered_item_root` accumulates the rich leaves. `execution_stream_root` accumulates the compact leaves in the same order.
 
-- Canonical field and byte encodings.
-- Rich `DerivedItemV3` leaves for sequence evidence.
-- Compact `ExecutionItemV3` leaves for Lighter execution.
-- `ordered_item_root` and `execution_stream_root` accumulation.
-- Dual-root `C_bind` construction.
-- Structural verification for one Continuum sequence transition.
-- An atomic Rust join for sequence and execution public inputs.
+The sequence proof must verify a one-to-one projection between both roots. It must compute `C_bind` from both roots and the batch context.
 
-The structural verifier verifies order, counts, continuity, duplicates, terminal outcomes, both roots, and `C_bind`. It delegates cryptographic predicates to `TransitionAuthenticator`.
+`TransitionAuthenticator` defines the authentication boundary for receipt, opening, data, transcript, and frame predicates.
 
-That delegation is deliberate host scaffolding. Production must compile receipt, opening, data, transcript, and frame predicates into the proof backend.
+Recursive segment proofs must preserve continuity across long transcript ranges. They keep the external sequence-proof size fixed.
 
-The optional `lighter-poseidon2` feature pins Lighter's Plonky2 fork. It generates the exact field-native preimages used by the accumulator design.
+The protocol calls the recursive proof object `SequenceTransitionProof`.
 
-The default SHA-256 hasher exists only for deterministic host tests. It is not the Lighter circuit hash.
+## 5. Lighter execution proof
 
-## 4. Pinned Lighter prover overlay
+Lighter executes each clear transaction under its existing rules. These rules cover signatures, nonces, margins, matching, liquidations, and state transitions.
 
-`patches/lighter-prover` targets one exact Lighter prover revision. The patch adds the direct Poseidon2 accumulator step and a native mutation test.
+The Lighter circuit must add one field-native Poseidon2 transition for each logical input. It must use Lighter's existing five-field transaction hash.
 
-The accumulator adds one transition for each logical input. It reuses the existing transaction hash and avoids a separate execution-leaf hash.
+This accumulator computes the same compact root as the sequence proof. It preserves parallel execution of heavy and light transaction chains.
 
-The overlay does not complete transaction dispatch. Lighter still needs to thread the accumulator through heavy and light paths, `JumpState`, blocks, recursion, batches, and the wrapper.
+The validity relation must use a constrained terminal selector for a proved terminal outcome without a Lighter transaction.
 
-Lighter also needs a terminal selector and a versioned blob word for `C_bind`. The [upstream integration map](../upstream/lighter-prover-integration-map.md) names each target.
+## 6. Atomic settlement
 
-## 5. Settlement reference
+The sequence proof and Lighter proof must expose the same `C_bind`. A versioned blob must also bind this value to the Lighter batch.
 
-`contracts/production/ContinuumLighterBinding.sol` models the atomic two-proof join. It verifies identifiers, state heads, cursor continuity, roots, counts, priority continuity, and blob binding.
+The atomic join must verify identifiers, state heads, cursor continuity, roots, counts, priority continuity, and blob binding.
 
-The contract updates both heads only after both verifier calls succeed. A revert leaves every head unchanged.
+Blob validity remains in Lighter's polynomial-commitment verification domain. `C_bind` binds both proof statements to the same versioned blob.
 
-The contract remains a reference scaffold. Its tests use mock verifiers, and it does not replace Lighter's settlement contract.
+Settlement advances both heads only after both verifier calls succeed. A rejection leaves both heads unchanged.
 
-Production must connect the relation to Lighter custody, KZG verification, batch commitments, governance, verifier upgrades, priority operations, and the Escape Hatch.
+The host can enter `ZK_FINALIZED` only after this atomic join accepts both proofs.
 
-## 6. Demo bridge
+## 7. Failure and recovery behavior
 
-`demo/gateway` embeds the V1 Continuum sequencer and serves a browser dashboard. It drives a simulated Lighter-style price-time order book with bots and scripted scenarios.
+A missing opening, unavailable receipt data, or solver failure stalls protected finality. None of these failures creates a silent gap.
 
-The browser re-derives signatures, receipt links, Merkle roots, and stream commitments. Optional tooling posts demo anchors and spans to Sepolia.
+Only a proved terminal outcome consumes a protected position without execution. This rule prevents an operator from changing a failure into a deletion.
 
-The fraud scenario produces ready-to-submit calldata. The Solidity demo covers segment proof verification, bridge commitments, forced inclusion, and optimistic slashing.
+Transcript data loss cannot use recovery cancellation. The proof needs that data to account for every frozen position.
 
-The demo does not execute Lighter's real transaction circuits. Its stream challenge accepts an off-chain Boolean instead of verifying a sequence proof.
+The integration retains Lighter's priority queue and Escape Hatch. A protected service failure can move the system to priority-only operation.
 
-Use the demo for behavior review and integration discussion. Do not use it for custody or production settlement.
+The priority queue supports forced operations. The Escape Hatch keeps asset recovery independent of Continuum liveness.
 
-## 7. Tests and reproducibility
+## 8. Interactive demonstration
 
-The repository CI separates four test surfaces:
+The browser demo in `demo/gateway` lets a reader see encrypted admission, signed receipts, timed openings, ordering effects, and fraud evidence.
 
-- Stable Rust tests for the plugin, sequencer, VDF, and gateway.
-- Exact Poseidon2 tests against the pinned Lighter Plonky2 revision.
-- Patch application and compilation against the pinned Lighter prover.
-- Foundry tests for the V1 demo and the production settlement reference.
+It drives a simulated Lighter-style price-time order book with bots and scripted scenarios. The browser independently derives signatures, receipt links, roots, and stream commitments.
 
-Adversarial tests cover stream mutations, skipped cursors, duplicate receipts, duplicate envelopes, configuration changes, terminal item misuse, and settlement mismatches.
+Optional tooling posts demo anchors and spans to Sepolia. The Solidity demo covers segment-proof verification, bridge commitments, forced inclusion, and optimistic slashing.
 
-The test suite also covers VDF proof changes, timelock opening changes, aggregate wave changes, transcript faults, and demo contract fraud paths.
+The interactive layer represents its Lighter proof result with an off-chain Boolean. This value is a simple true or false result.
 
-See the [team test runbook](./team-test-runbook.md) for exact commands.
+The interactive layer uses a simulated order book to explain the end-to-end flow.
 
-## 8. Work that is not present
-
-The repository does not contain a `SequenceTransitionProof` SNARK, recursive sequence aggregation, or a production `ZK_FINALIZED` host state.
-
-It does not contain a complete Lighter heavy and light wrapper proof with `C_bind`. It also lacks real settlement verifier artifacts and production blob binding.
-
-Production data availability, restart recovery, live deployment pins, cross-language vectors, and measured prover overhead remain open.
-
-Cross-system recursion remains optional. The sequence prover still needs internal recursion for scalable spans.
+The proof-backed settlement path replaces that Boolean with the sequence and Lighter circuit verifiers described in sections 4 through 6.

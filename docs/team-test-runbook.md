@@ -1,24 +1,36 @@
 # Lighter team test runbook
 
-This runbook separates what can be executed today from the final upstream
-prover wiring. A green run means the extracted demo, V3.1 host relation,
-Poseidon2 preimages, pinned accumulator gadget, and atomic settlement join are
-internally consistent. It does not mean the production Lighter wrapper already
-enforces Continuum validity.
+This runbook verifies how protected Continuum order connects to Lighter
+execution. The sequence relation and execution relation meet through equal
+`C_bind` commitments.
+
+A green run verifies five reference boundaries:
+
+- Rust verifies ordered-stream construction, continuity, VDF, timelock, and
+  demo behavior.
+- The Poseidon2 adapter verifies exact field preimages against Lighter's pinned
+  Plonky2 fork.
+- The overlay applies to the pinned Lighter prover and passes its native
+  mutation test.
+- Solidity verifies atomic rejection for proof, root, count, cursor, and
+  `C_bind` mismatches.
+- Adversarial tests verify rejection of changed or reordered protected inputs.
+
+These results verify reference relations and mock-verifier settlement. Live enforcement also requires deployed sequence-proof and Lighter-proof verifiers.
 
 ## 1. Prerequisites
 
-- Rust stable for the demo and source-independent host tests.
-- Rust `nightly-2025-12-06` for Lighter's pinned Plonky2 fork.
-- Foundry for the demo and production-reference Solidity tests.
-- Git for applying the pinned upstream overlay.
+- Install Rust stable for the demo and source-independent host tests.
+- Install Rust `nightly-2025-12-06` for Lighter's pinned Plonky2 fork.
+- Install Foundry for the demo and production-reference Solidity tests.
+- Install Git to apply the pinned upstream overlay.
 
-The GitHub Actions workflow installs these toolchains and runs every command
-below on a clean runner.
+The GitHub Actions workflow installs these tools on clean runners. It leaves
+the wall-clock benchmark disabled.
 
 ## 2. Host and demo tests
 
-From the repository root:
+From the repository root, run:
 
 ```bash
 cargo test -p continuum-lighter-plugin
@@ -26,18 +38,22 @@ cargo test -p demo-gateway -p sequencer -p vdf
 ```
 
 The plugin tests cover canonical ordering, exact logical counts, terminal
-no-ops, receipt and envelope duplication, cursor/config continuity, both
-stream roots, `C_bind`, and an end-to-end sequence-to-settlement mutation.
+no-ops, duplicate receipts, duplicate envelopes, and cursor and configuration
+continuity. They also cover both stream roots, `C_bind`, and an end-to-end
+sequence-to-settlement mutation.
 
-The inherited `test_performance_improvement` VDF wall-clock check is ignored in
-generic CI because its 100 ms threshold depends on runner class. Run it only on
-the pinned benchmark host with:
+Generic CI ignores the inherited `test_performance_improvement` VDF wall-clock
+test. Its 100 ms threshold depends on the runner class.
+
+On the pinned benchmark host, run:
 
 ```bash
 cargo test -p vdf test_performance_improvement -- --ignored
 ```
 
 ## 3. Exact Lighter Poseidon2 adapter
+
+Run:
 
 ```bash
 cargo +nightly-2025-12-06 test \
@@ -46,12 +62,16 @@ cargo +nightly-2025-12-06 test \
 ```
 
 This feature pins Lighter's Plonky2 fork at
-`e1c2d35450948b88fca6a7e69e2643c3ecad3caa`. The compact stream is
-field-native: the previous four-field digest and existing five-field Lighter
-transaction hash enter Poseidon2 directly. Each item uses one tagged hash
-step; only the 64-bit logical index is split into two 32-bit limbs.
+`e1c2d35450948b88fca6a7e69e2643c3ecad3caa`. The compact stream uses native
+field values. Poseidon2 receives the previous four-field digest and the
+existing five-field Lighter transaction hash directly.
+
+Each item uses one tagged hash step. Only the 64-bit logical index splits into
+two 32-bit limbs.
 
 ## 4. Atomic settlement tests
+
+Run:
 
 ```bash
 (cd demo/contracts && \
@@ -61,11 +81,13 @@ step; only the 64-bit logical index is split into two 32-bit limbs.
 ```
 
 The production-reference contract calls two pinned-verifier interfaces before
-changing any head. Tests show that an invalid proof, unequal `C_bind`, either
-root mismatch, count mismatch, or continuity failure reverts the whole update
-and leaves the pending batch available.
+it changes any head. Tests verify atomic rejection for an invalid proof,
+unequal `C_bind`, either root mismatch, count mismatch, or continuity failure.
+The rejection leaves the pending batch available.
 
 ## 5. Apply the Lighter overlay
+
+Run:
 
 ```bash
 git clone https://github.com/elliottech/lighter-prover.git /tmp/lighter-prover
@@ -79,34 +101,6 @@ git -C /tmp/lighter-prover apply \
   cargo +nightly-2025-12-06 test -p circuit continuum --lib)
 ```
 
-The overlay adds the exact native and circuit gadget plus an order/terminal
-mutation test. It retains Lighter's BUSL-1.1 header and copies no unrelated
-upstream source.
-
-## 6. Joint branch test
-
-The first Lighter-owned branch should wire the included gadget through the
-touch points in
-[`upstream/lighter-prover-integration-map.md`](../upstream/lighter-prover-integration-map.md):
-
-1. derive one compact item from each real transaction path;
-2. add the terminal no-op selector for `BAD_AEAD` and `BAD_ENCODING`;
-3. carry old/new root and logical count through heavy/light `JumpState`;
-4. stitch those claims in the block circuit and recursion layers;
-5. expose root/count/`C_bind` through batch and wrapper public inputs; and
-6. version blob bytes 0..33 and constrain the reserved word to `C_bind`.
-
-The branch must test mixed heavy/light streams ending in heavy, light,
-terminal, and empty boundaries. Insert, delete, duplicate, reorder, index-skip,
-outcome mutation, and padding-as-input cases must all fail.
-
-## 7. Recursion decision
-
-Use recursive segment aggregation inside the sequence prover from the first
-scalable implementation. Keep the sequence and execution proofs independent
-at settlement until benchmarks exist. Recursing the final sequence proof into
-Lighter's wrapper is optional and should be adopted only if it lowers total
-gas/calldata without materially increasing p95 latency or memory.
-
-The acceptance metrics and honest pitch boundary are in
-[`lit_improvement_roadmap.md`](../lit_improvement_roadmap.md).
+The overlay adds the exact native gadget, circuit gadget, and order and
+terminal mutation test. It retains Lighter's BUSL-1.1 header. It copies no
+unrelated upstream source.

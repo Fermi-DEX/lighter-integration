@@ -1,20 +1,61 @@
 # Continuum × Lighter Integration v3.1
 
-## A proof-carrying sequencer feed for validity-proven order and execution
+*A proof-carrying sequencer feed for validity-proven order and execution*
 
-**Status:** proposed production specification; team-test implementation included
-**Original date:** 12 July 2026
-**V3.1 update:** 26 August 2026
-**Repository baseline:** `cryptohariseldon/continuum-monorepo`, including `main` and branch `lighter-integration-v1` at `9418a528`  
-**Target:** Lighter Core, an application-specific validity rollup settled on Ethereum
+## How the system works
+
+Continuum is an ordering layer that accepts encrypted transactions, signs their positions, and records them in a verifiable transcript.
+
+For a plain-language example, read [Fair ordering basics](./fair-ordering-basics.md).
+
+Lighter proves that its state transition follows a chosen transaction order. That proof does not prove that the sequencer chose the order fairly.
+
+A sequencer that sees transaction contents can favor selected orders. It can add, omit, or reorder protected transactions before it proves valid execution.
+
+Continuum adds a proof-carrying admission and ordering layer. Fair ordering means transaction contents cannot influence order after Continuum issues a receipt.
+
+The protected flow has seven steps:
+
+1. The user signs a normal Lighter transaction and encrypts it inside a fixed-size envelope.
+2. Continuum assigns an ordered position and returns a signed receipt before it can read the transaction.
+3. Time-lock work delays opening until the protocol fixes the order and frame inputs.
+4. A public solver opens the envelope after maturity.
+5. The sequence proof derives the exact ordered Lighter input stream from the receipted transcript.
+6. Lighter proves correct execution of that same stream.
+7. Ethereum verifies both proofs and their shared `C_bind`, then advances both states atomically.
+
+`C_bind` commits the ordered roots, cursors, frame inputs, policy, and decryption module. Equality joins ordering validity with execution validity.
+
+Atomic settlement updates both states after both proofs verify and expose equal commitments. Failed verification leaves both states unchanged.
+
+This design keeps Lighter as the execution authority. Continuum proves which protected transaction entered first and whether Lighter consumed the complete ordered stream.
+
+Section 4 defines the exact guarantee, assumptions, and scope limits.
+
+### Key terms
+
+| Term | Meaning |
+|---|---|
+| Transcript | The ordered record of admitted envelopes, receipts, openings, and state continuity |
+| PoSq | Continuum's sequential-work mechanism for verifiable transcript progress |
+| Data availability (DA) | Storage and retrieval of the data required to reconstruct and prove a transition |
+| Time-lock puzzle (TLP) | An encryption puzzle that requires sequential work before public opening |
+| Frame | A deterministic group of transcript positions with fixed execution inputs |
+| Cursor | The last transcript position that settlement consumed |
+| Maturity | The earliest protocol point at which an opening can become canonical |
+| First-in, first-out (FIFO) | Processing in the same order that admission fixed |
+| First-come, first-served (FCFS) | Eligibility based on an observable arrival rule |
+| AEAD | Authenticated encryption that protects secrecy and detects changed ciphertext |
+| Layer 1 (L1) | Ethereum settlement and custody contracts |
+| Layer 2 (L2) | Lighter execution above Ethereum settlement |
 
 ---
 
-## 1. Decision
+## 1. Protocol design
 
-Lighter already proves that a chosen transaction stream executed correctly. It proves signatures, nonce transitions, risk checks, price-time-priority matching, liquidations, state transitions, recursive aggregation, and the correspondence between execution public data and Ethereum blob data. The remaining discretionary input is the transaction stream chosen by the sequencer.
+Lighter already proves the correct execution of a chosen transaction stream. It proves signatures, nonce transitions, risk verification, price-time-priority matching, liquidations, state transitions, and recursive aggregation. It also proves the correspondence between execution public data and Ethereum blob data. The sequencer still chooses the transaction stream.
 
-Continuum should supply that stream as a **proof-carrying sequencer feed**.
+Continuum must supply that stream as a **proof-carrying sequencer feed**.
 
 The production integration consists of two validity proofs:
 
@@ -30,11 +71,11 @@ Ethereum settlement
     accepts the state transition only when both proofs expose the same C_bind
 ```
 
-The proofs remain independent and are generated in parallel. Ethereum joins them by equality of one circuit-native commitment. Recursive aggregation into a single proof is a later gas optimization; it is not the security boundary.
+The proofs remain independent, and the provers generate them in parallel. Ethereum joins them by comparing one circuit-native commitment. Recursive aggregation can combine them to reduce gas costs. Recursion does not form the security boundary.
 
-This design closes the precise gap in Lighter’s present architecture. Lighter’s documentation says that the sequencer coordinates FIFO ordering and that execution is deterministic from transaction order and oracle data. Its whitepaper also identifies the sequencer’s ordering power and residual millisecond-scale reordering as the remaining fairness surface. The execution proof establishes price-time priority *after* an order has entered Lighter’s state. Continuum establishes which signed transaction entered first.
+Lighter’s documentation says the sequencer coordinates first-in, first-out (FIFO) ordering. It also says transaction order and oracle data determine execution. The whitepaper identifies sequencer ordering power and residual millisecond-scale reordering as the remaining fairness surface. The execution proof establishes price-time priority *after* an order enters Lighter’s state. Continuum establishes which signed transaction enters first.
 
-The integration must fail closed. A Lighter batch without a valid sequence proof may be exposed as provisional soft state, but it cannot advance the Ethereum-settled state. A Continuum failure moves the system to priority-only operation and then Lighter’s existing Escape Hatch if necessary. It never silently falls back to an unprotected sequencer.
+The integration must fail closed. Lighter can expose a batch without a valid sequence proof as provisional soft state. This batch cannot advance the Ethereum-settled state. A Continuum failure moves the system to priority-only operation. The system then uses Lighter’s existing Escape Hatch as necessary. It never silently uses an unprotected sequencer.
 
 ### 1.1 The minimal kernel
 
@@ -45,50 +86,55 @@ The kernel has four parts:
 3. A sequence proof derives the exact Lighter input stream from a contiguous, validity-proven transcript transition.
 4. Lighter’s proof and the sequence proof commit to the same ordered-input root.
 
-Everything else—receipts, DA, force paths, operating modes, versioning, and solver capacity—exists to make this kernel usable under faults.
+Receipts, DA, force paths, operating modes, versioning, and solver capacity make this kernel usable during faults.
 
 ---
 
-## 2. Verified Lighter architecture and the actual gap
+## 2. Lighter architecture and the ordering gap
 
-This specification is grounded in Lighter’s current [technical architecture](https://docs.lighter.xyz/about-lighter/technical-architecture-lighter-core), [October 2025 whitepaper](https://assets.lighter.xyz/whitepaper.pdf), [current API documentation](https://apidocs.lighter.xyz/docs/get-started), and [published circuit and contract audits](https://docs.lighter.xyz/security/security-audits).
+These primary sources support this specification:
+
+- [Lighter technical architecture](https://docs.lighter.xyz/about-lighter/technical-architecture-lighter-core)
+- [Lighter whitepaper from October 2025](https://assets.lighter.xyz/whitepaper.pdf)
+- [Current Lighter API documentation](https://apidocs.lighter.xyz/docs/get-started)
+- [Published Lighter circuit and contract audits](https://docs.lighter.xyz/security/security-audits)
 
 ### 2.1 What Lighter proves
 
-Lighter is an application-specific Ethereum L2. Its sequencer receives signed L2 transactions, executes them, and constructs blocks and batches. Its prover proves the resulting state transition. Ethereum contracts custody assets, store the canonical state root, verify batch proofs, execute withdrawals, and maintain a priority-operation queue.
+Lighter is an application-specific Ethereum L2. Its sequencer receives and executes signed L2 transactions. It then constructs blocks and batches. Its prover proves the resulting state transition. Ethereum contracts custody assets and store the canonical state root. They also verify batch proofs, execute withdrawals, and maintain a priority-operation queue.
 
-The audited proving stack uses Plonky2 over the Goldilocks field with recursive transaction, block, segment, and batch aggregation. The final proof is wrapped for Ethereum verification. Lighter’s wrapper also proves that its public account-delta data corresponds to the EIP-4844 blob committed on Ethereum.
+The audited proving stack uses Plonky2 over the Goldilocks field. It recursively aggregates transactions, blocks, segments, and batches. A wrapper prepares the final proof for Ethereum verification. Lighter’s wrapper also proves a correspondence between public account-delta data and the EIP-4844 blob commitment on Ethereum.
 
 The execution relation covers:
 
-- Lighter API-key signatures and per-key nonce progression;
-- order placement, modification, cancellation, and other L2 operations;
-- margin, health, reduce-only, slippage, and protocol risk constraints;
-- deterministic instruction-stack continuation for multi-cycle operations;
-- price-time-priority matching;
-- liquidations and protocol accounting;
-- old-to-new state-root continuity;
-- priority-operation prefix consumption;
-- account-delta and market-data correspondence to the posted blob.
+- Lighter API-key signatures and per-key nonce progression
+- Order placement, modification, cancellation, and other L2 operations
+- Margin, health, reduce-only, slippage, and protocol risk constraints
+- Deterministic instruction-stack continuation for multi-cycle operations
+- Price-time-priority matching
+- Liquidations and protocol accounting
+- Old-to-new state-root continuity
+- Priority-operation prefix consumption
+- Account-delta and market-data correspondence to the posted blob
 
-Lighter’s Order Book Tree encodes price and an internally assigned order nonce into leaf position. At an equal price, the lower nonce is older and has higher priority. The proof therefore establishes that matching respects the order already represented in state.
+Lighter’s Order Book Tree encodes price and an internally assigned order nonce into each leaf position. At one price, the lower nonce is older. It has higher priority. The proof establishes that matching respects the order already represented in state.
 
 ### 2.2 What it does not prove
 
 The public specification does not establish:
 
-- a cryptographic ingress point at which arrival becomes final;
-- a byte-level merge rule across API servers, regions, or connections;
-- that transaction order is independent of plaintext;
-- that an API acknowledgement binds the sequencer to a position;
-- that every acknowledged transaction appears in the executed stream;
-- that batch boundaries and oracle choices were fixed before order contents were known.
+- A cryptographic ingress point where arrival becomes final
+- A byte-level merge rule across API servers, regions, or connections
+- Proof that transaction order is independent of plaintext
+- Proof that an API acknowledgement binds the sequencer to a position
+- Proof that every acknowledged transaction appears in the executed stream
+- Proof that the system fixed batch boundaries and oracle choices before it knew order contents
 
-Lighter’s execution proof can approve either of two valid transaction orders if both produce valid state transitions. It proves execution validity, not fair selection of the execution input.
+Lighter’s execution proof can approve either of two valid transaction orders. Both orders produce valid state transitions. The proof establishes execution validity. It does not establish fair selection of the execution input.
 
 ### 2.3 Why stream equality is the correct reduction
 
-For user flow, Lighter’s state transition is deterministic once the following are fixed:
+For user flow, these inputs determine Lighter’s state transition:
 
 ```text
 old state
@@ -98,26 +144,28 @@ oracle and frame inputs
 protocol configuration
 ```
 
-The existing `lighter-integration-v1` branch correctly identified the key reduction: if the complete logical input stream is bound to Continuum’s order, Lighter’s existing matching proof inherits that order. No change to the matching algorithm is required.
+Binding the complete logical input stream to Continuum’s order transfers that order to Lighter’s existing matching proof. The matching algorithm needs no change.
 
-The v1 branch did not complete the binding. Its B3 circuit accepted an opened-stream hash as a public input but did not prove that this hash came from a valid Continuum transcript. A malicious operator could choose an arbitrary transaction list, choose its matching stream hash, and produce a valid Lighter proof. The demo bridge compounded this by accepting a Boolean off-chain mismatch assertion and by never binding a span to a Lighter state root or execution proof.
+A public stream hash alone does not prove that a valid Continuum transcript produced the stream. The `SequenceTransitionProof` proves this derivation.
 
-V3 adds the missing `SequenceTransitionProof` and makes equality of the two proof outputs a settlement condition.
+Settlement also requires equality between the sequence-proof output and execution-proof output. This equality prevents an operator from proving execution over a substitute stream.
 
 ---
 
-## 3. Design-space decision
+## 3. Why the design uses two proofs
 
-| Design | Guarantee | Main defect | Verdict |
-|---|---|---|---|
-| Continuum gateway and signed receipts | Fast accountable order acknowledgements | Lighter can settle a different order | Shadow mode only |
-| Co-anchor a PoSq root beside a Lighter batch | Public correlation between systems | A root alone does not prove exact consumption | Insufficient |
-| Optimistic stream-equality challenge | Detectable divergence after a challenge window | Full transaction data is not in Lighter’s blob; on-chain TLP opening and insertion/deletion proofs are impractical | Reject |
-| Put the complete PoSq verifier in every Lighter transaction circuit | One monolithic proof | Non-native RSA, Keccak, receipt, and TLP verification bloats the execution hot path | Reject |
-| Independent sequence proof and execution proof joined on one commitment | Validity-enforced order and execution; parallel proving; modular upgrades | Requires one additional proof relation and a small wrapper/contract change | **Selected** |
-| Recursively verify the sequence proof inside Lighter’s final wrapper | Same security with one Ethereum proof | Tighter proof-system and upgrade coupling | Later optimization |
+Each alternative changes what settlement can verify:
 
-The selected design preserves the clean separation of concerns:
+| Approach | Result |
+|---|---|
+| Signed receipts alone | Provide accountability, but Lighter can settle a different stream |
+| A PoSq root beside a Lighter batch | Correlates both systems, but does not prove exact consumption |
+| An optimistic stream challenge | Requires unavailable blob data or impractical on-chain TLP and mutation proofs |
+| A complete PoSq verifier in each Lighter transaction circuit | Adds non-native RSA, Keccak, receipt, and TLP work to the execution hot path |
+| Independent proofs joined on one commitment | Gives validity-enforced ordering and execution with parallel proving and modular upgrades |
+| Sequence-proof recursion inside the final wrapper | Keeps the same public relation with tighter proof-system and upgrade coupling |
+
+The selected design assigns one proof responsibility to each layer:
 
 - Continuum proves ordering and deterministic derivation.
 - Lighter proves execution.
@@ -129,49 +177,51 @@ The selected design preserves the clean separation of concerns:
 
 ### 4.1 Primary property
 
-For every Ethereum-finalized protected Lighter batch, the ordered logical user transactions consumed by Lighter are exactly the Lighter namespace projection of the accepted Continuum transcript range, with no insertion, deletion, duplication, or reordering.
+For each Ethereum-finalized protected Lighter batch, Lighter consumes the exact Lighter namespace projection of the accepted Continuum transcript range. No insertion, deletion, duplication, or reordering occurs.
 
 ### 4.2 Supporting properties
 
 Subject to the assumptions in §4.4:
 
-- a Continuum receipt fixes an envelope’s position before plaintext can be used by the sequencer;
-- transaction contents cannot influence admission position within the protected namespace;
-- batch and frame cuts are committed before the corresponding plaintext opens;
-- every consumed transcript position has one objectively proven resolution;
-- state-dependent transaction rejection occurs inside Lighter’s execution proof rather than in an opaque prefilter;
-- a signed orphan receipt is slashable;
-- a stalled operator cannot settle a conflicting state transition;
+- A Continuum receipt fixes an envelope’s position before the sequencer can use the plaintext.
+- Transaction contents cannot influence admission position within the protected namespace.
+- The system commits batch and frame cuts before the corresponding plaintext opens.
+- Every consumed transcript position has one objectively proven resolution.
+- Lighter’s execution proof handles state-dependent transaction rejection instead of an opaque prefilter.
+- A signed orphan receipt is slashable.
+- A stalled operator cannot settle a conflicting state transition.
 - Lighter’s L1 priority queue and Escape Hatch remain independent of Continuum availability.
 
 ### 4.3 Explicit non-goals
 
-The design does not prove:
+These properties remain outside the guarantee:
 
-- that a message censored before receipt issuance reached the sequencer;
-- equal network latency across users or regions;
-- physical-time FCFS between Ethereum priority requests and off-chain ingress;
-- secrecy if the user leaks its own signed transaction out of band;
-- absolute wall-clock delay independent of the calibrated sequential-work assumption;
-- oracle correctness beyond Lighter’s existing oracle model;
-- successful execution of a validly sequenced transaction under later state, nonce, margin, price, or slippage checks;
-- ordering fairness for any unprotected lane sharing the same mutable order book.
+- Proof of pre-receipt delivery for a censored message
+- Equal network latency across users or regions
+- Physical-time first-come, first-served (FCFS) order between Ethereum priority requests and off-chain ingress
+- Secrecy after a user leaks its own signed transaction out of band
+- Absolute wall-clock delay independent of the calibrated sequential-work assumption
+- Oracle correctness beyond Lighter’s existing oracle model
+- Successful execution after later state, nonce, margin, price, or slippage predicates reject a validly sequenced transaction
+- Ordering fairness for an unprotected lane that shares the same mutable order book
 
 ### 4.4 Assumptions
 
 The final property depends on:
 
-- soundness of Lighter’s execution proof and the new sequence proof;
-- collision resistance of the pinned hash functions;
-- unforgeability of Lighter API-key signatures and Continuum receipts;
-- correct Ethereum settlement and Lighter custody contracts;
-- sequentiality and calibrated hardware margin of the selected time-lock module;
-- availability of the receipted Continuum data needed to generate the sequence proof;
-- at least one honest public solver for non-cooperative recovery;
-- correct, version-pinned canonical encodings;
-- governance not replacing the verifier or implementation outside the declared upgrade process.
+- Soundness of Lighter’s execution proof and the new sequence proof
+- Collision resistance of the pinned hash functions
+- Unforgeability of Lighter API-key signatures and Continuum receipts
+- Correct Ethereum settlement and Lighter custody contracts
+- Sequentiality and calibrated hardware margin of the selected time-lock module
+- A ceremony-derived RSA modulus with unknown factors and no retained trapdoor
+- Fresh high-entropy puzzle randomness for every envelope
+- Availability of the receipted Continuum data that the sequence proof needs
+- At least one honest public solver for non-cooperative recovery
+- Correct, version-pinned canonical encodings
+- Governance that does not replace the verifier or implementation outside the declared upgrade process
 
-Zero knowledge is optional for the sequencing statement. Succinct validity is essential. The proof may keep Lighter transaction bytes private where Lighter’s existing validium-like state design permits it.
+Zero knowledge is optional for the sequencing statement. Succinct validity is essential. The proof can keep Lighter transaction bytes private where Lighter’s validium-like state design permits privacy.
 
 ---
 
@@ -207,16 +257,16 @@ Ethereum LighterCoreV3
 
 ### 5.1 Logical roles
 
-- **Lighter client:** creates the existing signed transaction and encrypts it.
-- **Continuum ingress:** validates only the visible envelope surface and assigns the receipted order.
-- **Continuum DA nodes:** retain envelopes, receipts, tick records, and opening material.
-- **Public solver network:** begins mandatory time-lock work and publishes verified openings.
-- **Sequence prover:** proves the Continuum transition and derives Lighter’s canonical inputs.
-- **Lighter sequencer:** becomes an execution coordinator. It no longer chooses protected user order.
-- **Lighter prover:** proves the existing state transition plus a small ordered-input accumulator.
-- **Ethereum contracts:** join both proofs, store the consumed Continuum cursor, and preserve the priority/escape path.
+- **Lighter client:** Creates the existing signed transaction and encrypts it.
+- **Continuum ingress:** Verifies only the visible envelope surface and assigns the receipted order.
+- **Continuum DA nodes:** Retain envelopes, receipts, tick records, and opening material.
+- **Public solver network:** Starts mandatory time-lock work and publishes verified openings.
+- **Sequence prover:** Proves the Continuum transition and derives Lighter’s canonical inputs.
+- **Lighter sequencer:** Coordinates execution. It no longer chooses protected user order.
+- **Lighter prover:** Proves the existing state transition and a small ordered-input accumulator.
+- **Ethereum contracts:** Join both proofs and store the consumed Continuum cursor. They also preserve the priority and escape path.
 
-The same company may initially operate several roles. Security follows from the proofs and the encryption boundary, not organizational separation.
+One operator can hold several roles. The proofs and encryption boundary provide security. Organizational separation does not provide this security.
 
 ---
 
@@ -242,18 +292,19 @@ DeploymentDomainV3 {
 domain_hash = keccak256("CONTINUUM_LIGHTER_DOMAIN_V3" || canonical(domain))
 ```
 
-The domain prevents replay across Lighter deployments, forks, verifier upgrades, Continuum epochs, or policy versions. A batch cannot cross a domain change. Any verifier, implementation, encoding, policy, or decryption-module change starts a new epoch from a state checkpoint jointly committed by the old and new configurations.
+The domain prevents replay across Lighter deployments, forks, verifier upgrades, Continuum epochs, and policy versions. A batch cannot cross a domain change. Each verifier, implementation, encoding, policy, or decryption-module change starts a new epoch. The old and new configurations jointly commit the state checkpoint.
 
 Production configuration pins:
 
-- the Lighter proxy and implementation code hash;
-- the execution verification key;
-- the sequence verification key;
-- the PoSq genesis and transcript verifier;
-- the envelope and transaction encodings;
-- the protected scheduling policy;
-- the decryption module and parameters;
-- all internal hash identifiers and serialization rules.
+- The Lighter proxy and implementation code hash
+- The execution verification key
+- The sequence verification key
+- The PoSq genesis and transcript verifier
+- The envelope and transaction encodings
+- The protected scheduling policy
+- The decryption module and parameters
+- The RSA modulus hash, group encoding, and delay classes inside the decryption module
+- All internal hash identifiers and serialization rules
 
 ---
 
@@ -261,7 +312,7 @@ Production configuration pins:
 
 ### 7.1 Preserve Lighter authorization
 
-The protected payload is the exact canonical signed Lighter transaction produced by Lighter’s current SDK. Lighter API keys use a circuit-friendly Schnorr construction and maintain an independent nonce per API key. Continuum does not replace that authorization scheme.
+The protected payload is the exact canonical signed Lighter transaction from Lighter’s current SDK. Lighter API keys use a circuit-friendly Schnorr construction. Each API key maintains an independent nonce. Continuum does not replace that authorization scheme.
 
 ```text
 CanonicalSignedLighterTx {
@@ -275,7 +326,7 @@ CanonicalSignedLighterTx {
 }
 ```
 
-There is no mandatory outer L1-wallet signature. The v1 proposal’s extra secp256k1 user signature would break bot key isolation, subaccount operations, smart-wallet use, and unattended HFT. The one-time admission ticket pays for malformed or unauthorized submissions. Lighter remains the sole authority on whether the recovered transaction is authorized.
+The protocol requires no outer L1-wallet signature. An extra secp256k1 user signature breaks bot key isolation and subaccount operations. It also breaks smart-wallet use and unattended HFT. The one-time admission ticket pays for malformed or unauthorized submissions. Lighter alone determines whether the recovered transaction has authorization.
 
 ### 7.2 Envelope
 
@@ -296,15 +347,17 @@ LighterEnvelopeV3 {
 }
 ```
 
-All integers use the canonical byte order specified by the test-vector suite. Lists include explicit length and maximum length. Merkle roots commit to leaf count. The production protocol does not use Rust `bincode` as a consensus encoding.
+All integers use the canonical byte order in the test-vector suite. Lists include an explicit length and maximum length. Merkle roots commit to leaf count. Consensus encoding must be language-independent and versioned.
 
-The v1 branch assumes a 1,024-byte envelope with a 642-byte body. V3 treats 1,024 bytes as a candidate, not a fact. Before freezing a size, the integration test suite must serialize every currently supported Lighter transaction, including grouped orders, pool actions, transfers, withdrawals, key changes, subaccount actions, and maximum signatures. The selected protected trading class is the smallest fixed power-of-two size that fits all price- and order-affecting transaction types.
+Before receipt issuance, ingress must verify the envelope magic, version, size class, domain, epoch, inclusion window, and decryption module. It must also verify zero padding and canonical, group-valid puzzle public data. The sequence proof must verify the same admission predicate.
 
-If one class cannot cover every administrative transaction, those operations may use a separate fixed class. Every class must remain operation-indistinguishable within its declared scope. Market, side, price, size, account, create/cancel/modify type, and API-key identity remain encrypted.
+Envelope-size selection starts with a 1,024-byte candidate and a 642-byte body. Serialization tests must cover every supported Lighter transaction before size selection. They cover grouped orders, pool actions, transfers, withdrawals, key changes, subaccount actions, and maximum signatures. The selected class is the smallest fixed power-of-two size that fits every price-affecting and order-affecting transaction type.
+
+A separate fixed class can cover administrative transactions that do not fit one class. Every class must remain operation-indistinguishable within its declared scope. Market, side, price, size, account, operation type, and API-key identity remain encrypted. Operation type includes create, cancel, and modify.
 
 ### 7.3 Admission tickets
 
-Tickets are prepaid, one-time bearer credentials with a nullifier. They enforce spam cost and Lighter quotas without revealing account identity to ingress.
+Tickets are prepaid, one-time bearer credentials with a nullifier. They enforce spam cost and Lighter quotas. They do not reveal account identity to ingress.
 
 ```text
 TicketV3 {
@@ -316,17 +369,19 @@ TicketV3 {
 }
 ```
 
-Ticket issuance may reflect Lighter account tier, staking, rate limit, or commercial policy. Ticket class cannot change ordering within the protected stream. It controls admission quota and price only.
+Ticket issuance can reflect Lighter account tier, staking, rate limit, or commercial policy. Ticket class cannot change ordering within the protected stream. It controls admission quota and price.
 
-Ingress atomically consumes the nullifier when it signs a receipt. A crash after receipt issuance cannot restore the ticket. Nullifier state is durable and is part of the proved PoSq transition.
+The admission transition must verify an authorized issuer, issuer signature, class, expiry, unused nullifier, and policy capacity. The pinned `policy_hash` binds the issuer set, class rules, and quota limits.
+
+Ingress atomically consumes the nullifier as it signs a receipt. A crash after receipt issuance cannot restore the ticket. Nullifier state is durable. The proved PoSq transition includes this state.
 
 ### 7.4 Protected batch submission
 
-`sendTxBatch` is not a sequencing unit. The protected SDK decomposes an API batch into separately encrypted logical transactions and returns one receipt per transaction. This prevents a client-selected batch from becoming an opaque internal ordering island.
+`sendTxBatch` is not a sequencing unit. The protected SDK splits an API batch into separately encrypted logical transactions. It returns one receipt per transaction. This rule prevents a client-selected batch from becoming an opaque internal ordering island.
 
-Protocol-native grouped, OCO, or atomic order types remain one logical transaction if Lighter’s existing state transition already treats them atomically. Their internal semantics remain Lighter’s responsibility.
+Protocol-native grouped, one-cancels-the-other (OCO), or atomic orders remain one logical transaction. Lighter remains responsible for their internal semantics.
 
-For transactions from one API key with consecutive nonces, the SDK waits for admission of nonce `n` before sending `n+1`, or uses Lighter’s documented skip-nonce semantics. The protocol never silently reorders transactions to repair a client nonce race.
+For consecutive nonces from one API key, the protected SDK waits for admission of nonce `n` before it sends `n+1`. It can also use Lighter’s documented skip-nonce semantics. It must not reorder transactions to repair a client nonce race.
 
 ### 7.5 API surface
 
@@ -369,7 +424,7 @@ TERMINAL_INVALID(reason)
 PRIORITY_ONLY
 ```
 
-The HTTP `200` currently returned by Lighter means only that API syntax was accepted. The protected route returns the actual signed Continuum admission outcome.
+Lighter currently returns HTTP `200` only after it accepts the API syntax. The protected route returns the actual signed Continuum admission outcome.
 
 ---
 
@@ -377,18 +432,18 @@ The HTTP `200` currently returned by Lighter means only that API syntax was acce
 
 ### 8.1 One protected stream
 
-All L2 transactions capable of changing trading state must use the protected stream:
+All L2 transactions that can change trading state must use the protected stream:
 
-- create, modify, cancel, and cancel-all;
-- market, limit, trigger, TWAP, and grouped order operations;
-- externally initiated liquidation transactions;
-- leverage, margin, transfer, withdrawal, pool, or account operations whose placement relative to orders can change execution validity or risk.
+- Create, modify, cancel, and cancel-all operations
+- Market, limit, trigger, TWAP, and grouped order operations
+- Externally initiated liquidation transactions
+- Leverage, margin, transfer, withdrawal, pool, or account operations that can change execution validity or risk through their placement
 
-A direct transaction path into the same mutable book defeats the guarantee. Read-only API calls are outside the stream. L1 priority operations use the separate safety lane in §12.
+A direct transaction path into the same mutable book defeats the guarantee. Read-only API calls remain outside the stream. L1 priority operations use the separate safety lane in §12.
 
 ### 8.2 Uniform protected eligibility
 
-Lighter currently applies different speed bumps by account and transaction class: Standard accounts list 200 ms maker/cancel and 300 ms taker delay, while Premium maker/cancel flow can receive a 0 ms path and Premium takers receive 140–200 ms delay. These are public product policies, but preserving them would require a post-decryption priority scheduler and would make the guarantee “FCFS after policy-defined eligibility” rather than strict receipt order.
+Lighter currently applies different speed bumps by account and transaction class. Standard accounts list 200 ms maker/cancel delay and 300 ms taker delay. Premium maker/cancel flow can receive a 0 ms path. Premium takers receive 140–200 ms delay. These public product policies require a post-decryption priority scheduler. Keeping them changes the guarantee to “FCFS after policy-defined eligibility” instead of strict receipt order.
 
 V3 selects one uniform minimum execution delay for the protected stream:
 
@@ -396,15 +451,13 @@ V3 selects one uniform minimum execution delay for the protected stream:
 eligible_frame(item) = admission_frame(item) + protected_delay_frames
 ```
 
-The delay is identical for create, cancel, modify, maker, taker, account tier, and market. Fees, staking discounts, and rate limits may remain differentiated. Latency priority does not.
+The delay is identical for create, cancel, modify, maker, taker, account tier, and market. Fees, staking discounts, and rate limits can remain different. Latency priority cannot differ.
 
-This is the smallest rule that preserves strict blind FIFO, keeps cancels indistinguishable from trades, and avoids a large scheduling circuit. The exact delay is an epoch parameter derived from the opening and proving latency budget. It is not hard-coded in this document.
-
-A future policy-aware scheduler may support differential speed classes by proving `eligibility = admission_position + declared_policy_delay` and maintaining a proved pending-set root. Such a deployment must be marketed as policy-aware ordering and uses a different `policy_hash`. It is outside V3.
+This minimal rule preserves strict blind FIFO and keeps cancels indistinguishable from trades. It also avoids a large scheduling circuit. The opening and proving latency budget determines the exact epoch delay parameter. The deployment domain pins that parameter.
 
 ### 8.3 Fixed frames
 
-Frame boundaries are fixed before any payload in the frame can open.
+The protocol fixes frame boundaries before any payload in the frame can open.
 
 ```text
 FrameId(tick) = floor(tick / ticks_per_frame)
@@ -413,7 +466,7 @@ FrameRange(f) =
     [f * ticks_per_frame, (f + 1) * ticks_per_frame)
 ```
 
-The sequencer cannot close a frame early because it is empty, full of expensive operations, or contains adverse flow. If one frame exceeds the Lighter block capacity, it is divided into deterministic chunks by `(tick, position)` with a fixed maximum item count. Overflow carries to the next chunk without changing relative order.
+The sequencer cannot close a frame early because of its contents. This rule covers empty frames, expensive operations, and adverse flow. The protocol divides an oversized frame into deterministic `(tick, position)` chunks with a fixed maximum item count. It carries overflow forward without changing relative order.
 
 ```text
 FramePlanV3 {
@@ -437,15 +490,15 @@ FramePlanV3 {
 }
 ```
 
-`FramePlanV3` is committed in the Continuum transcript before an opening for that frame is accepted. This removes content-dependent discretion over block cuts, priority ranges, and oracle snapshots.
+The Continuum transcript commits `FramePlanV3` before it accepts an opening for that frame. This commitment removes content-dependent discretion over block cuts, priority ranges, and oracle snapshots.
 
 ### 8.4 Time semantics
 
-A VDF proves sequential work. It does not prove wall-clock time. V3 does not derive Lighter’s economic timestamp as `genesis_time + tick × target_tick_duration`.
+A VDF proves sequential work. It does not prove wall-clock time. V3 does not use `genesis_time + tick × target_tick_duration` to derive Lighter’s economic timestamp.
 
-Lighter keeps its existing proved timestamp, oracle, funding, trigger, expiry, and dead-man-switch semantics. The integration adds one constraint: the exact `l1_origin`, oracle snapshot, and protocol-event roots used for a frame are committed before user plaintext opens. This prevents order-aware input selection while avoiding a new claim that PoSq ticks are a trusted wall clock.
+Lighter keeps its existing proved timestamp, oracle, funding, trigger, expiry, and dead-man-switch semantics. The integration adds one constraint. The system commits the exact `l1_origin`, oracle snapshot, and protocol-event roots before user plaintext opens. This rule prevents order-aware input selection. It does not claim that PoSq ticks form a trusted wall clock.
 
-Any stronger schedule—such as “use the latest oracle round available before frame close”—must define availability through signed provider data or a transparent Continuum oracle namespace and must be proven under a new `policy_hash`.
+A stronger schedule must define availability through signed provider data or a transparent Continuum oracle namespace. This rule covers schedules such as “use the latest oracle round available before frame close.” A new `policy_hash` must bind the proof.
 
 ---
 
@@ -453,9 +506,9 @@ Any stronger schedule—such as “use the latest oracle round available before 
 
 ### 9.1 Permissionless solve
 
-Every receipted envelope is opened through a permissionless time-lock mechanism. Solving begins as soon as the envelope is receipted. Publication or use of the opening remains gated by the protocol’s maturity rule. Starting work at receipt avoids the current implementation error in which solving begins only at maturity and completes roughly one full delay too late.
+A permissionless time-lock mechanism opens every receipted envelope. Solving starts immediately after receipt issuance. The protocol’s maturity rule still gates publication and use of the opening. A solve that starts only at maturity finishes about one full delay late.
 
-The decryption interface is versioned:
+The deployment domain versions this decryption interface:
 
 ```text
 trait DecryptionModuleV3 {
@@ -481,43 +534,61 @@ BAD_ENCODING          // CLEAR bytes fail the pinned Lighter parser
 L1_CANCELLED          // explicit settlement-enforced cancellation event
 ```
 
-`TLP_UNAVAILABLE`, `DATA_UNAVAILABLE`, and `SOLVER_TIMEOUT` are not terminal no-ops. They stall the sequence proof at that cursor. Allowing an unavailable opening to become a gap would let an operator with a private decryption advantage learn the transaction, suppress the public opening, and omit adverse flow.
+`L1_CANCELLED` is a deterministic recovery no-op. It is not an unavailable-opening outcome in `PROTECTED` mode.
 
-DA is therefore checked before receipt finality. Once a receipt is issued, the system either produces the objective opening result or stops finalizing later protected state.
+At the pinned L1 fault deadline, the settlement contract moves to `PRIORITY_ONLY`. It atomically freezes the complete unsettled suffix from committed receipt data.
+
+The freeze records the start cursor, end cursor, transcript root, and receipt-vector commitment. No later proof can execute an item in that range.
+
+After the recovery timeout, anyone can call the pinned contract to emit one cancellation event for the complete frozen suffix.
+
+The event activates the pinned stall penalty and recovery payout policy. Cancellation still triggers slashing and required compensation.
+
+The event binds the domain, epoch, frozen range, transcript root, receipt-vector commitment, and L1 origin. It also binds the fault and timeout blocks.
+
+The sequence proof must verify the event, contract, mode, deadlines, range coverage, event uniqueness, and transcript data for every position. The frozen range cannot depend on openings, plaintext, or operator choice.
+
+Before this deterministic freeze, `TLP_UNAVAILABLE` and `SOLVER_TIMEOUT` stall the sequence proof. They are not terminal no-ops in `PROTECTED` mode.
+
+`TRANSCRIPT_DATA_UNAVAILABLE` cannot use suffix cancellation. Without transcript data, the proof cannot account for every receipted position.
+
+A gap from an unavailable opening can give a privately advantaged operator useful information. The operator cannot omit that item while protected settlement continues.
+
+The system verifies DA before receipt finality. After receipt issuance, the system produces the objective opening result or stops finalizing later protected state.
 
 ### 9.3 Execution versus sequence validity
 
-Continuum decides only whether authenticated cleartext exists and whether it parses under the pinned byte grammar. It does not decide Lighter authorization or state validity.
+Continuum determines only whether authenticated cleartext exists and parses under the pinned byte grammar. It does not determine Lighter authorization or state validity.
 
 For `CLEAR(bytes)` that pass the parser, Lighter’s circuit evaluates:
 
-- API-key signature validity;
-- API-key nonce and skip-nonce rules;
-- expiry and time-in-force;
-- margin and health;
-- order flags and market state;
-- slippage, reduce-only, and protocol limits;
-- the exact transaction-specific success or failure path.
+- API-key signature validity
+- API-key nonce and skip-nonce rules
+- Expiry and time-in-force
+- Margin and health
+- Order flags and market state
+- Slippage, reduce-only, and protocol limits
+- The exact transaction-specific success or failure path
 
-Invalid signatures, stale nonces, insufficient margin, bad price bounds, and state-dependent failures cannot be filtered by the adapter. They become circuit-proven Lighter outcomes.
+The adapter must not filter invalid signatures, stale nonces, insufficient margin, bad price bounds, or state-dependent failures. Lighter's circuit must prove these outcomes.
 
-For `BAD_AEAD` and `BAD_ENCODING`, Lighter’s ordered-input circuit consumes the derived item, proves a no-state-change terminal result, and consumes no Lighter API nonce. The admission ticket remains spent.
+For `BAD_AEAD`, `BAD_ENCODING`, and `L1_CANCELLED`, Lighter’s ordered-input circuit must consume the derived item. It must prove a no-state-change terminal result and consume no Lighter API nonce. The admission ticket remains spent.
 
 ### 9.4 Failure-semantics table
 
-Before production, Lighter must publish a table for every supported transaction type:
+For every supported transaction type, the protocol definition must include these fields:
 
 | Field | Required definition |
 |---|---|
 | Canonical parser | exact bytes, bounds, and version |
 | Authentication | key lookup and signature predicate |
 | Nonce rule | increment, skip, consume-on-failure behavior |
-| Stateful checks | exact ordered predicates |
+| Stateful verification | Exact ordered predicates |
 | Failure result | stable code and state delta |
-| Retry rule | whether the same signed transaction may be retried |
+| Retry rule | Whether a retry can use the same signed transaction |
 | Internal expansion | instruction-stack cycles generated by one logical input |
 
-Blind admission removes API-server stateful prevalidation. This table is a consensus artifact, not an SDK note.
+Blind admission removes API-server stateful preverification. These outcome rules form part of the consensus relation.
 
 ---
 
@@ -525,17 +596,17 @@ Blind admission removes API-server stateful prevalidation. This table is a conse
 
 ### 10.1 Namespace projection
 
-Continuum may carry multiple applications on one global tape. The envelope header exposes `namespace_id`, while all economically sensitive Lighter fields remain encrypted.
+Continuum can carry multiple applications on one global tape. The envelope header exposes `namespace_id`. All economically sensitive Lighter fields remain encrypted.
 
-For a global cursor range `(old_cursor, new_cursor]`, the sequence proof:
+For a global cursor range `(old_cursor, new_cursor]`, the sequence proof performs these actions:
 
-1. verifies the complete global receipt/tick transition;
-2. selects every entry with the pinned Lighter namespace;
-3. proves that no Lighter entry in the range is omitted;
-4. preserves global `(tick, position)` order;
-5. resolves each selected entry exactly once.
+1. Verifies the complete global receipt/tick transition.
+2. Selects every entry with the pinned Lighter namespace.
+3. Includes every Lighter entry in the range.
+4. Preserves global `(tick, position)` order.
+5. Resolves each selected entry exactly once.
 
-Lighter stores both the last consumed global cursor and the namespace-local item count. The latter prevents ambiguity when a global range contains zero Lighter items.
+Lighter stores the last consumed global cursor and the namespace-local item count. The item count prevents ambiguity in a global range with zero Lighter items.
 
 ### 10.2 Derived item
 
@@ -555,7 +626,18 @@ DerivedItemV3 {
 }
 ```
 
-The logical transaction bytes are a private witness where permitted. Their length and hash are public to the proof relation. Length is always committed.
+The logical transaction bytes form a private witness where the protocol permits privacy. Their length and hash are public to the proof relation. The commitment always includes length.
+
+The proof relation uses these canonical resolution codes and values:
+
+| Resolution | `resolution` | Cleartext fields | Compact execution fields |
+|---|---:|---|---|
+| `CLEAR` | `0` | Exact byte length and pinned `H_L` hash, with `terminal_reason = 0` | Parsed nonzero `tx_type`, exact five-field Lighter `tx_hash`, proved outcome, and `terminal_noop = false` |
+| `BAD_AEAD` | `1` | Zero length, zero hash, and `terminal_reason = 1` | Zero `tx_type`, zero `tx_hash`, `outcome_class = 1`, and `terminal_noop = true` |
+| `BAD_ENCODING` | `2` | Exact recovered length and hash, with `terminal_reason = 2` | Zero `tx_type`, zero `tx_hash`, `outcome_class = 2`, and `terminal_noop = true` |
+| `L1_CANCELLED` | `3` | Zero length, zero hash, and `terminal_reason = 3` | Zero `tx_type`, zero `tx_hash`, `outcome_class = 3`, and `terminal_noop = true` |
+
+Zero hash means every field limb is zero. Every item uses its contiguous namespace-local index as `logical_index`.
 
 ### 10.3 Dual Lighter-native accumulators (V3.1)
 
@@ -607,28 +689,21 @@ E_{i+1} = H_L(
 execution_stream_root = E_n
 ```
 
-The compact item is folded directly into one accumulator preimage. There is
-no separately hashed execution leaf. Lighter reuses its existing five-field
-transaction hash, so the per-item hot path adds one tagged Poseidon2 hash and
-one 64-bit index split. Receipt, envelope, opening, and cleartext metadata stay
-in the sequence proof.
+The compact item folds directly into one accumulator preimage. A separately hashed execution leaf does not exist. Lighter reuses its existing five-field transaction hash. The per-item hot path adds one tagged Poseidon2 hash and one 64-bit index split. Receipt, envelope, opening, and cleartext metadata stay in the sequence proof.
 
-`H_L` is the exact hash, field, width, round constants, and padding rule pinned to Lighter’s audited circuit fork. “Poseidon2-compatible” is not a specification. A shared vector suite fixes:
+The deployment must pin the exact `H_L` hash, field, width, round constants, and padding rule from Lighter's audited circuit fork. A shared vector suite must cover these values:
 
-- field modulus and canonical limb range;
-- field-element ordering;
-- byte-to-field packing;
-- length binding;
-- domain constants;
-- output limb order;
-- serialization to Ethereum `bytes32`.
+- Field modulus and canonical limb range
+- Field-element ordering
+- Byte-to-field packing
+- Length binding
+- Domain constants
+- Output limb order
+- Serialization to Ethereum `bytes32`
 
-Reference `bytes32` serialization is four canonical 64-bit output limbs in declared order. The final choice follows Lighter’s circuit conventions and must be frozen by vectors before implementation.
+The `bytes32` serialization must use four canonical 64-bit output limbs in declared order. Lighter's circuit conventions define the order. Shared vectors must bind this choice.
 
-The existing global Keccak receipt/log commitments remain. V3.1 adds the rich
-namespace accumulator and compact execution accumulator, then proves their
-one-to-one relationship. It does not migrate unrelated Continuum tenants or
-discard cheap EVM accountability commitments.
+The global Keccak receipt and log commitments remain available for other Continuum namespaces and Ethereum Virtual Machine (EVM) accountability. V3.1 must add the rich namespace accumulator and compact execution accumulator. The sequence proof must prove their one-to-one relationship.
 
 ### 10.4 Complete derivation input
 
@@ -648,16 +723,16 @@ DerivationInputV3 {
 }
 ```
 
-The protected claim is strongest for user ordering. Other roots ensure that their merge with user flow is fixed before reveal and that Lighter’s proof and sequence proof refer to the same complete frame inputs.
+The protected claim is strongest for user ordering. Other roots fix their merge with user flow before reveal. They also bind both proofs to the same complete frame inputs.
 
-Internal instruction-stack continuation is not separately sequenced. It is a deterministic expansion of one logical Lighter transaction and remains inside Lighter’s execution relation.
+The protocol does not sequence internal instruction-stack continuation separately. It deterministically expands one logical Lighter transaction and remains inside Lighter’s execution relation.
 
-Protocol-created operations must satisfy one of two rules:
+Protocol-created operations must follow one of these rules:
 
-- the execution circuit proves a unique deterministic trigger and placement; or
-- an external signed operation enters through Continuum like any other user transaction.
+- The execution circuit proves a unique deterministic trigger and placement.
+- An external signed operation enters through Continuum like any other user transaction.
 
-Discretionary internal transactions are forbidden in protected mode.
+Protected mode forbids discretionary internal transactions.
 
 ---
 
@@ -732,50 +807,53 @@ SequencePublicV3 {
 
 ### 11.3 Private witness
 
-The witness contains:
+The witness contains these items:
 
-- the relevant receipt, tick-record, log, and segment data;
-- fixed envelopes and their DA membership proofs;
-- time-lock openings or aggregate opening proofs;
-- frame plans and their pre-opening commitments;
-- namespace membership and projection paths;
-- recovered cleartext bytes;
-- canonical parse results;
-- priority and oracle commitment witnesses;
-- persistent ticket/nullifier updates.
+- The relevant receipt, tick-record, log, and segment data
+- Fixed envelopes and their DA membership proofs
+- Time-lock openings or aggregate opening proofs
+- Frame plans and their pre-opening commitments
+- Namespace membership and projection paths
+- Recovered cleartext bytes
+- Canonical parse results
+- Priority and oracle commitment witnesses
+- Persistent ticket/nullifier updates
 
-### 11.4 Required checks
+### 11.4 Required verification
 
 `π_seq` proves all of the following:
 
 1. The old state equals the previously accepted application state.
 2. Every tick and transcript transition follows the pinned PoSq verifier.
 3. Receipt signatures, epoch, tick, position, envelope hash, and digest-chain links are valid.
-4. Each batch leaf contains the exact canonical receipt reference.
-5. Positions and list lengths are unambiguous; Merkle roots bind leaf count.
-6. No envelope hash, ticket nullifier, or receipt position is duplicated across spans.
-7. DA for every receipted envelope was committed before receipt finality.
-8. Frame boundaries follow the fixed pre-decryption rule.
-9. `FramePlanV3` was committed before any opening for the frame.
-10. Every Lighter namespace position in the consumed range resolves exactly once.
-11. Every accepted opening passes the pinned decryption verifier.
-12. `BAD_AEAD` and `BAD_ENCODING` satisfy their objective predicates.
-13. Availability or solver failure is not converted into a terminal item.
-14. The Lighter namespace projection preserves lexicographic `(tick, position)` order.
-15. `DerivedItemV3`, `ExecutionItemV3`, both stream roots, `receipt_vector_root`, and `opening_root` are correctly computed, with exactly one compact item for each rich item.
-16. Priority, oracle, protocol-event, L1-origin, and policy commitments match the frame plan.
-17. The new cursor and persistent roots are the unique transition outputs.
-18. `C_bind` is computed from the exact public transition data in §13.
+4. Every envelope passes the canonical header, window, size, padding, module, and puzzle-validity predicates.
+5. Every ticket has an authorized issuer, valid signature, permitted class, live expiry, unused nullifier, and available policy capacity.
+6. Each batch leaf contains the exact canonical receipt reference.
+7. Positions and list lengths are unambiguous. Merkle roots bind leaf count.
+8. Every envelope hash, ticket nullifier, and receipt position is unique across spans.
+9. The transition proves the DA commitment for every envelope before receipt finality.
+10. Frame boundaries follow the fixed pre-decryption rule.
+11. The transcript commits `FramePlanV3` before any opening for the frame.
+12. Every Lighter namespace position in the consumed range resolves exactly once.
+13. Every accepted opening passes the pinned decryption verifier.
+14. `BAD_AEAD` and `BAD_ENCODING` satisfy their objective predicates.
+15. Each `L1_CANCELLED` item belongs to one authorized complete-suffix recovery event under §9.2.
+16. Availability or solver failure is not converted into a terminal item.
+17. The Lighter namespace projection preserves lexicographic `(tick, position)` order.
+18. Each rich item maps to exactly one compact item. The proof computes both stream roots, `receipt_vector_root`, and `opening_root`.
+19. Priority, oracle, protocol-event, L1-origin, and policy commitments match the frame plan.
+20. The new cursor and persistent roots are the unique transition outputs.
+21. The proof computes `C_bind` from the exact public transition data in §13.
 
-The current repository `ReplayProver` and `PoSqHost.submitAnchor` do not satisfy this relation. The existing transcript predicate omits receipt verification and chain equality checks, resets some duplicate state across spans, and does not validate openings or gap reasons. Production requires a new normative verifier and differential vectors against the Rust implementation.
+The normative verifier must cover receipt verification, chain equality, cross-span duplicate state, openings, and gap reasons. Differential vectors must match the Rust implementation.
 
 ### 11.5 Proof backend
 
-The relation is normative; the backend is versioned.
+The relation is normative. The deployment domain versions the backend.
 
-The reference path is a recursively aggregatable proof over the same field family used by Lighter’s pinned prover fork, followed by an Ethereum-verifiable wrapper. The implementation may instead use a zkVM/STARK plus wrapper if benchmarks are better. Lighter does not import RSA or TLP verification into each matching circuit. The sequence proof amortizes transcript and delay verification over a complete settlement span.
+The reference path uses a recursively aggregatable proof over the field family in Lighter’s pinned prover fork. An Ethereum-verifiable wrapper follows this proof. Better benchmark results and the same proven relation can justify a zkVM or STARK wrapper. Lighter does not import RSA or TLP verification into each matching circuit. The sequence proof amortizes transcript and delay verification over a complete settlement span.
 
-Only a `ZK_FINALIZED` sequence state may authorize production Lighter settlement. The repository’s optimistic transcript backend remains useful for shadow mode and fault drills, not for a protected batch.
+Production Lighter settlement accepts only a `ZK_FINALIZED` sequence state. An `OPTIMISTIC` transition cannot authorize a protected batch.
 
 ---
 
@@ -783,9 +861,9 @@ Only a `ZK_FINALIZED` sequence state may authorize production Lighter settlement
 
 ### 12.1 One settlement-enforced inbox
 
-Lighter already maintains an Ethereum priority queue and an Escape Hatch. Current public interfaces include withdrawal, cancel-all, pool-share exit, key change, and related safety operations; the architecture also describes reduce-only exits. These operations are ordered by the L1 queue and must be processed before their deadline or the protocol enters Desert/Escape mode.
+Lighter already maintains an Ethereum priority queue and an Escape Hatch. Current public interfaces include withdrawal, cancel-all, pool-share exit, and key change. They also include related safety operations. The architecture describes reduce-only exits. The L1 queue orders these operations. The protocol must process them before their deadline or enter Desert/Escape mode.
 
-V3 uses this as the single settlement-enforced force path. It does not create a second independent PoSq market-operation queue.
+V3 uses this queue as the single settlement-enforced force path. It does not create a second independent PoSq market-operation queue.
 
 The deterministic merge for each frame is:
 
@@ -800,15 +878,15 @@ The proof and contract advance one authoritative priority cursor.
 
 ### 12.2 Scope of force operations
 
-Initial production scope retains risk-reducing and asset-safety operations:
+The force-operation scope includes these risk-reducing and asset-safety operations:
 
-- cancel-all;
-- supported reduce-only IOC close;
-- secure withdrawal/full exit;
-- public-pool exit;
-- emergency API-key change where already supported.
+- Cancel-all
+- Supported reduce-only immediate-or-cancel (IOC) close
+- Secure withdrawal or full exit
+- Public-pool exit
+- Emergency API-key change where Lighter supports it
 
-Arbitrary delayed maker or leveraged taker orders are not force-included in V3. An L1-delayed trading order is frequently stale and creates a public front-running surface. Pre-receipt censorship of ordinary market flow remains detectable through relayers and probes but is not converted into a guaranteed original market position.
+V3 does not force-include arbitrary delayed maker or leveraged taker orders. An L1-delayed trading order is often stale. It creates a public front-running surface. Relayers and probes still detect pre-receipt censorship of ordinary market flow. This detection does not guarantee the original market position.
 
 ### 12.3 Receipt challenge
 
@@ -820,21 +898,25 @@ Each frame publishes a length-bound `receipt_vector_root` over:
 (domain_hash, cursor, envelope_hash, receipt_digest, receipt_signature_hash)
 ```
 
-The user receives a Merkle path after frame closure. If a signed receipt names a cursor already behind the settled head but does not match the finalized vector root, the user submits it to the host contract with a challenge bond. The operator must provide the matching inclusion proof within the response window. Failure or mismatch proves equivocation/omission, slashes the Continuum bond, and moves protected settlement to `SEQUENCE_STALLED`.
+The user receives a Merkle path after frame closure. Consider a signed receipt that names a cursor behind the settled head. A mismatch with the finalized vector root lets the user submit a host-contract challenge with a bond. The operator must provide the matching inclusion proof within the response window. A failure or mismatch proves equivocation or omission. It slashes the Continuum bond and moves protected settlement to `SEQUENCE_STALLED`.
 
-A receipt ahead of the settled head may be promoted after an SLA timeout as evidence of a stalled sequence. It cannot regain its original market position through L1; the safe response is to pause protected settlement and preserve cancel/exit rights.
+The operator bond provides slashable deterrence and a service-security reserve. Encrypted admission hides exact transaction notional, so message limits alone cannot prove full loss coverage.
+
+The contract must stop receipts before the posted bond falls below the public policy minimum. The protocol treats this bond as deterrence, not full-loss insurance.
+
+After a service-level agreement (SLA) timeout, the protocol can promote a receipt ahead of the settled head as evidence of a stalled sequence. It cannot regain its original market position through L1. The safe response pauses protected settlement and preserves cancel and exit rights.
 
 ### 12.4 Pre-receipt censorship
 
-A single client cannot prove that an unacknowledged packet reached the ingress boundary. The production service uses:
+A single client cannot prove that an unacknowledged packet reached the ingress boundary. The production service uses these controls:
 
-- several independently operated relayers;
-- signed rejection/full-window outcomes;
-- deterministic capacity commitments;
-- observer probes through the same paths;
-- public regional latency and miss-rate telemetry.
+- Several independently operated relayers
+- Signed rejection and full-window outcomes
+- Deterministic capacity commitments
+- Observer probes through the same paths
+- Public regional latency and miss-rate telemetry
 
-These make censorship measurable. They do not turn network delivery into a cryptographic fact.
+These controls make censorship measurable. They do not turn network delivery into a cryptographic fact.
 
 ---
 
@@ -868,30 +950,21 @@ C_bind = H_L(
 )
 ```
 
-The sequence proof derives both roots from the validity-proven Continuum
-transcript. Lighter derives `execution_stream_root` and the count from the
-logical inputs it actually executes, carries the rich `ordered_item_root` as a
-public binding value, and recomputes `C_bind`. The settlement join requires
-equality of both roots, count, and `C_bind`; Lighter cannot substitute the rich
-root without breaking the sequence proof or join.
+The sequence proof derives both roots from the validity-proven Continuum transcript. Lighter derives `execution_stream_root` and the count from its executed logical inputs. It carries the rich `ordered_item_root` as a public binding value and recomputes `C_bind`. The settlement join requires equality of both roots, count, and `C_bind`. Lighter cannot substitute the rich root without breaking the sequence proof or join.
 
 ### 13.2 Lighter circuit delta
 
-Lighter adds:
+The target Lighter circuit must add these elements:
 
-1. the compact field-native `ExecutionItemV3` accumulator, advanced once per logical input;
-2. terminal no-state-change handling for `BAD_AEAD` and `BAD_ENCODING`;
-3. explicit public roots for priority, oracle, and protocol-event inputs;
-4. `C_bind` in block, segment, batch, and wrapper aggregation;
-5. exact continuity checks for the prior and new Continuum cursor.
+1. The compact field-native `ExecutionItemV3` accumulator, which advances once per logical input
+2. Terminal no-state-change handling for `BAD_AEAD`, `BAD_ENCODING`, and `L1_CANCELLED`
+3. Explicit public roots for priority, oracle, and protocol-event inputs
+4. `C_bind` in block, segment, batch, and wrapper aggregation
+5. Exact continuity verification for the prior and new Continuum cursor
 
-Internal matching cycles do not advance the accumulator. A taker that consumes ten makers remains one logical sequenced transaction followed by deterministic instruction-stack work.
+Internal matching cycles do not advance the accumulator. A taker that consumes ten makers remains one logical sequenced transaction. Deterministic instruction-stack work follows it.
 
-The V3.1 preimage removes the avoidable second leaf hash and byte decomposition,
-so one Poseidon2 hash is the design minimum per logical item. The measured
-prover regression is still unknown: the accumulator also affects aggregation
-and wrapper connections. Constraint count, proof latency, memory, and recursion
-depth must be benchmarked against Lighter’s exact audited prover fork.
+The V3.1 preimage removes the second leaf hash and byte decomposition. Within this rolling accumulator, each logical item needs one Poseidon2 transition to change the root. Activation requires measurements of constraint count, latency, memory, aggregation cost, and recursion depth against Lighter's exact audited prover fork.
 
 ### 13.3 Blob integration
 
@@ -902,20 +975,20 @@ bytes [0..1]   version
 bytes [2..33]  reserved
 ```
 
-V3 uses this existing surface:
+The target wrapper must use this existing surface:
 
 ```text
 version        = CONTINUUM_BINDING_V3
 reserved[32]   = canonical_bytes32(C_bind)
 ```
 
-The wrapper circuit binds the word to the execution proof’s `C_bind`. The sequence proof exposes the same canonical word. The Lighter batch commitment already binds the blob’s KZG commitment and execution public data; the version bump makes the ordering binding part of that proved data without increasing blob size.
+The wrapper circuit must bind the word to the execution proof’s `C_bind`. The sequence proof must expose the same canonical word. The Lighter batch commitment already binds its polynomial commitment and execution public data. The version bump adds ordering to that proved data without increasing blob size.
 
-This follows the EIP-4844 pattern in which a ZK rollup uses its own internal commitment plus the blob commitment and proves equivalence between them. The blob remains inaccessible to EVM execution except through its commitment.
+This design follows the EIP-4844 pattern. A ZK rollup uses its internal commitment with the blob commitment and proves their equivalence. EVM execution can access the blob only through its commitment.
 
 ### 13.4 Contract flow
 
-The current `commitBatch`, `verifyBatch`, and `executeBatches` structure becomes:
+The settlement design defines this V3 contract interface:
 
 ```solidity
 commitBatchV3(batchCommitment, blobVersionedHash, cBind)
@@ -947,7 +1020,7 @@ execution proof verifier == pinned Lighter verifier
 epoch and verifier configuration do not change inside the batch
 ```
 
-Only after both proofs verify does the contract mark the batch verified and advance:
+The contract advances these values only after both proofs verify:
 
 ```text
 Lighter state root
@@ -979,25 +1052,25 @@ struct ContinuumBindingStateV3 {
 }
 ```
 
-The contract never performs a linear scan for an anchor. Proof certificates are addressed by hash and must extend the stored state exactly.
+The contract never performs a linear scan for an anchor. Hashes address proof certificates. Each certificate must extend the stored state exactly.
 
 ### 13.6 Recursive aggregation
 
-After production measurements, Lighter may recursively verify `π_seq` inside its final aggregation and submit one wrapped proof to Ethereum. The public relation and `C_bind` remain unchanged.
+Recursive aggregation can verify `π_seq` inside Lighter’s final aggregation. Lighter can then submit one wrapped proof to Ethereum. The public relation and `C_bind` remain unchanged.
 
-Recursion is adopted only if it reduces total cost without:
+Recursion is optional. It must reduce total cost and meet these design criteria:
 
-- serializing sequence and execution proving;
-- preventing independent verifier upgrades;
-- increasing settlement latency beyond the SLA;
-- importing an unpinned upstream proof library;
-- obscuring which verifier configuration authorized a batch.
+- Sequence proving and execution proving remain parallel.
+- Independent verifier upgrades remain possible.
+- Settlement latency remains within the SLA.
+- The wrapper pins every upstream proof library.
+- Public inputs identify the verifier configuration that authorized the batch.
 
 ---
 
-## 14. PoSq host and core changes
+## 14. Sequence validity host
 
-The current `PoSqHost.sol` is a prototype. V3 requires a stateful validity host.
+V3 uses a stateful validity host.
 
 ### 14.1 Finality modes
 
@@ -1007,29 +1080,29 @@ OPTIMISTIC
 ZK_FINALIZED
 ```
 
-Shadow-mode roots may be `OPTIMISTIC`. Lighter production settlement accepts only `ZK_FINALIZED` sequence transitions.
+`OPTIMISTIC` is a non-settling status. Lighter production settlement accepts only `ZK_FINALIZED` sequence transitions.
 
 ### 14.2 Required host properties
 
-The V3 host must:
+The V3 host must complete these actions:
 
-- verify or register the exact sequence proof and verifier ID;
-- enforce old-to-new transcript and cursor continuity;
-- bind proof certificates to domain, epoch, namespace, DA, openings, and configuration;
-- store receipt-vector roots and response deadlines;
-- tie fraud evidence to one accepted span;
-- enforce bond floor at admission and checkpoint time;
-- use canonical low-`s` ECDSA where ECDSA remains;
-- use identical Rust, circuit, and Solidity challenge derivation;
-- persist ticket/nullifier and capacity commitments;
-- reject duplicate-last Merkle ambiguity by binding leaf count;
-- pause protected settlement on proven receipt equivocation.
+- Verify or register the exact sequence proof and verifier ID.
+- Enforce old-to-new transcript and cursor continuity.
+- Bind proof certificates to domain, epoch, namespace, DA, openings, and configuration.
+- Store receipt-vector roots and response deadlines.
+- Tie fraud evidence to one accepted span.
+- Keep the bond above the public policy minimum while admission remains active.
+- Use canonical low-`s` ECDSA where ECDSA remains.
+- Use identical Rust, circuit, and Solidity challenge derivation.
+- Persist ticket/nullifier and capacity commitments.
+- Reject duplicate-last Merkle ambiguity by binding leaf count.
+- Pause protected settlement after proven receipt equivocation.
 
-The v1 branch discovered and fixed a Rust/Solidity mismatch in Wesolowski challenge derivation. That fix and all other cross-language cryptography must be represented by permanent differential vectors.
+Permanent differential vectors must cover Wesolowski challenge derivation and all other cross-language cryptography.
 
 ### 14.3 Durable consumer APIs
 
-Live broadcasts are insufficient for a settlement-critical adapter. Continuum adds:
+Live broadcasts are insufficient for a settlement-critical adapter. Continuum adds these durable consumer APIs:
 
 ```text
 GetTapeRange(start_cursor, end_cursor)
@@ -1041,7 +1114,7 @@ SubscribeFrom(cursor)
 GetSequenceCertificate(certificate_hash)
 ```
 
-Every API response has a canonical hash and can be independently reconstructed from DA.
+Every API response has a canonical hash. Anyone can reconstruct it independently from DA.
 
 ---
 
@@ -1049,58 +1122,56 @@ Every API response has a canonical hash and can be independently reconstructed f
 
 ### 15.1 Preserve Lighter’s hybrid DA
 
-Lighter publishes compressed account deltas and market data in Ethereum blobs, sufficient for its public account-state reconstruction and Escape Hatch. It does not publish the complete high-frequency transaction and order-book state.
+Lighter publishes compressed account deltas and market data in Ethereum blobs. This data supports its public account-state reconstruction and Escape Hatch. Lighter does not publish the complete high-frequency transaction and order-book state.
 
-V3 preserves that model. The Lighter blob adds only the 32-byte `C_bind` word in its existing reserved header.
+V3 preserves that model. The Lighter blob adds only the 32-byte `C_bind` word to its existing reserved header.
 
 ### 15.2 Continuum DA requirements
 
-Continuum DA retains:
+Continuum DA retains these items:
 
-- fixed envelopes;
-- admission receipts and receipt vectors;
-- tick records, segment data, and frame plans;
-- opening witnesses and aggregate opening proofs;
-- sequence proof inputs required for independent reproduction;
-- namespace projection paths;
-- sequence proof certificates.
+- Fixed envelopes
+- Admission receipts and receipt vectors
+- Tick records, segment data, and frame plans
+- Opening witnesses and aggregate opening proofs
+- Sequence proof inputs that independent reproduction requires
+- Namespace projection paths
+- Sequence proof certificates
 
-DA-before-receipt is mandatory: a receipt reaches final status only after the envelope is retrievable from the configured DA quorum and its commitment appears in the signed tick record.
+DA-before-receipt is mandatory. A receipt reaches final status after the configured DA quorum makes the envelope retrievable. Its commitment must also appear in the signed tick record.
 
-The full 1,024-byte-or-larger envelope stream is not copied into Ethereum blobs. At 20,000 envelopes/s, 1,024-byte envelopes alone produce 20.48 MB/s before erasure coding and proofs. This requires a dedicated high-throughput DA network with replicated archival nodes and a retrieval SLA.
+The protocol does not copy the full envelope stream into Ethereum blobs. Each envelope contains at least 1,024 bytes. At 20,000 envelopes/s, 1,024-byte envelopes produce 20.48 MB/s before erasure coding and proofs. This load requires a dedicated high-throughput DA network. The network needs replicated archival nodes and a retrieval SLA.
 
 ### 15.3 Withholding behavior
 
-If transcript data is withheld, `π_seq` cannot be produced. Lighter may continue to expose unfinalized soft state, but Ethereum does not advance. Safety holds; liveness moves through the states in §17.
+Withheld transcript data prevents production of `π_seq`. Lighter can continue to expose unfinalized soft state, but Ethereum does not advance. Safety holds. Liveness moves through the states in §17.
 
-Users retain receipts and receipt paths locally. Watchers mirror the receipt-vector roots and sequence certificates. Retention must exceed the receipt challenge window, Lighter proof delay, Ethereum reorganization margin, and recovery period.
+Users retain receipts and receipt paths locally. Watchers mirror the receipt-vector roots and sequence certificates. Retention must exceed each of these periods: the receipt challenge window, Lighter proof delay, Ethereum reorganization margin, and recovery period.
 
 ---
 
-## 16. Decryption throughput and required Continuum improvements
+## 16. Decryption throughput
 
-### 16.1 Current implementation limit
+### 16.1 Per-item TLP capacity
 
-The current repository uses one fixed-base solve-only time-lock puzzle per ciphertext. It aggregates verification proofs, not the sequential work. At arrival rate `λ`, delay work `T`, solver redundancy `r`, and operating headroom `h`:
+The per-item TLP profile uses one fixed-base solve-only time-lock puzzle per ciphertext. It aggregates verification proofs, not the sequential work. These formulas use arrival rate `λ`, delay work `T`, solver redundancy `r`, and operating headroom `h`:
 
 ```text
 required aggregate squaring rate = λ × T × r × h
 live puzzle lanes                = λ × delay_seconds × r × h
 ```
 
-At 10,000 envelopes/s and `T = 2.5 million` squarings, one solver copy requires 25 billion squarings/s. At 20,000 envelopes/s, two replicas, and 1.5× headroom, the requirement is 150 billion squarings/s. Proof aggregation does not reduce it.
+At 10,000 envelopes/s and `T = 2.5 million` squarings, one solver copy requires 25 billion squarings/s. At 20,000 envelopes/s, two replicas and 1.5× headroom require 150 billion squarings/s. Proof aggregation does not reduce this requirement.
 
-The v1 branch’s admission capacity of 640,000 envelopes/s therefore says little about end-to-end capacity. Decryption is the limiting path.
+### 16.2 Decryption profiles
 
-### 16.2 Production profiles
+V3 defines the module interface and separates these decryption profiles:
 
-V3 defines the module interface now and separates launch profiles:
+1. **Per-item TLP profile:** Supports bounded volume below a measured adversarial solver ceiling.
+2. **Transparent batch-wave profile:** Supports full-scale operation with a concrete construction, implementation, security proof, and hardware benchmark.
+3. **Threshold-decryption profile:** Provides an optional weaker mode with committee collusion and availability assumptions. It uses a distinct `decryption_module_id` and product label.
 
-1. **Per-item TLP profile:** permitted only for capped beta volume below a measured adversarial solver ceiling.
-2. **Transparent batch-wave profile:** required for unrestricted Lighter-wide deployment once a concrete construction, implementation, security proof, and hardware benchmark are selected.
-3. **Threshold-decryption profile:** optional weaker mode if Lighter accepts committee collusion and availability assumptions. It uses a distinct `decryption_module_id` and product label.
-
-The target full-scale module performs one delay-dominant solve per maturity wave, not one per transaction. This document does not pretend that the current `batch_solve` implementation already has that property.
+The full-scale profile must use one delay-dominant solve per maturity wave. Proof aggregation without work aggregation does not meet this profile.
 
 ### 16.3 Solve timeline
 
@@ -1120,18 +1191,26 @@ t_close < t_mature
 t_mature + open_verify_p99 + ingest_margin <= t_execute
 ```
 
-The no-look delay is derived from the full exposure window and adversarial hardware advantage. The current code formula omits terms identified in the repository’s formal-verification plan. Production uses the paper-faithful bound and refuses to start if configured parameters fail it.
+Every delay class must satisfy the protocol's no-look inequality:
 
-### 16.4 Launch gate
+$$T_k > \alpha \cdot R_{req} \cdot ((W + \Gamma) \cdot \Delta + \delta_{sub} + \sigma_{fence} + \xi + \mu)$$
 
-Unrestricted protected mainnet launch is blocked until tests demonstrate, under adversarial withholding:
+`T_k` is sequential work. `α` bounds adversarial hardware advantage. `R_req` is the required squaring rate.
 
-- peak and sustained opening throughput above Lighter’s target load;
-- two independent solver implementations;
-- p99 opening within the protected-delay budget;
-- proof generation within the settlement SLA;
-- hardware-advantage margin with documented benchmark methodology;
-- no optional reveal dependency on the Continuum or Lighter sequencer.
+`W + Γ` covers the admission window and publication slack. `Δ` is one tick. `δ_sub` bounds submission and admission time.
+
+`σ_fence` is fence slack. `ξ + μ` covers observation, verification, and implementation margins. Protected mode must remain disabled unless every delay class satisfies this bound.
+
+### 16.4 Opening capacity guarantee
+
+Full-scale protected service requires independent evidence for these properties:
+
+- Peak and sustained opening throughput above Lighter’s target load
+- Two independent solver implementations
+- P99 opening within the protected-delay budget
+- Proof generation within the settlement SLA
+- Hardware-advantage margin with documented benchmark methodology
+- No optional reveal dependency on the Continuum or Lighter sequencer
 
 ---
 
@@ -1160,48 +1239,58 @@ PROTECTED
 
 ### 17.1 Protected
 
-Normal user admission, execution, sequence proving, execution proving, and Ethereum settlement are live.
+Normal user admission, execution, sequence proving, execution proving, and Ethereum settlement remain active.
 
 ### 17.2 Sequence stalled
 
-New receipts stop. Lighter may finish proving a prefix already fully opened. No batch beyond the last proved Continuum cursor can settle. Users may cancel or reduce risk through the priority lane where supported.
+The system stops new receipts. Lighter can finish proving a prefix that is fully open. No batch beyond the last proved Continuum cursor can settle. Users can cancel or reduce risk through the supported priority lane.
 
 ### 17.3 Priority only
 
-Normal trading is disabled. Lighter processes settlement-enforced safety operations in priority-request order. Assets remain under Lighter’s existing custody and proof rules.
+The system disables normal trading. Lighter processes settlement-enforced safety operations in priority-request order. Assets remain under Lighter’s existing custody and proof rules.
 
 ### 17.4 Desert / Escape Hatch
 
-Lighter’s existing trigger freezes the last verified state and permits independent exits from Ethereum-posted public account data. Continuum adds no new custody or withdrawal dependency.
+Lighter’s existing trigger freezes the last verified state. It permits independent exits from Ethereum-posted public account data. Continuum adds no new custody or withdrawal dependency.
 
 ### 17.5 Recovery
 
-Recovery starts from the last jointly verified Lighter state, Continuum cursor, transcript root, and priority head. A new epoch proves continuity or explicitly records a terminal abandoned suffix. Governance cannot reinterpret or silently skip a receipted finalized position.
+Recovery starts from the last jointly verified Lighter state, Continuum cursor, transcript root, and priority head. A new protected epoch must prove continuity from that state.
+
+When all transcript data remains available, the deterministic frozen-suffix process in §9.2 can resolve missing openings. The sequence proof resolves every frozen position as `L1_CANCELLED`.
+
+This recovery transition runs outside `PROTECTED` mode and leaves Lighter execution state unchanged. It consumes no Lighter nonce and cannot restore the lost market opportunity.
+
+Transcript data loss cannot use this process. The system remains in `PRIORITY_ONLY` or enters the Escape Hatch.
+
+Future protected service after transcript loss needs a new deployment domain from the last verified head. It cannot claim continuity across the unavailable suffix.
+
+Governance cannot assert, select, reinterpret, or silently skip a receipted finalized position.
 
 ### 17.6 No automatic unprotected downgrade
 
-The v1 proposal degraded to “declared FCFS” after ordering fraud. V3 rejects that behavior. A faulting sequencer would benefit from forcing the protection downgrade.
+Ordering fraud cannot trigger an automatic downgrade to “declared FCFS.” This rule prevents a faulting sequencer from benefiting through a protection downgrade.
 
-Unprotected trading, if Lighter ever offers it, is a separate deployment or user-selected market state with a new domain, new epoch, explicit UI, and no Continuum claim. It cannot share a mutable protected book during the same epoch.
+Any future unprotected trading is a separate deployment or user-selected market state. It uses a new domain, new epoch, explicit UI, and no Continuum claim. It cannot share a mutable protected book during the same epoch.
 
 ---
 
 ## 18. Upgrade and governance safety
 
-Lighter’s contracts and verifier stack are upgradeable. Published audits identify privileged validator, governor, security-council, and upgrade-gatekeeper roles. V3 treats these as part of the trust surface.
+Lighter’s contracts and verifier stack support upgrades. Published audits identify privileged validator, governor, security-council, and upgrade-gatekeeper roles. V3 includes these roles in the trust surface.
 
-Protected status requires:
+Protected status requires these controls:
 
-- verifier and implementation hashes pinned in `DeploymentDomainV3`;
-- a nonzero public activation delay for normal upgrades;
-- emergency authority limited to pausing, priority-only mode, and asset safety;
-- verifier changes activated only at epoch boundaries;
-- old and new verifier sets jointly committing to the transition checkpoint;
-- no batch spanning an implementation, policy, encoding, or decryption change;
-- two independent audits for changes to either proof relation;
-- permanent public test vectors and reproducible verifier builds.
+- Verifier and implementation hashes pinned in `DeploymentDomainV3`
+- A nonzero public activation delay for normal upgrades
+- Emergency authority limited to pausing, priority-only mode, and asset safety
+- Verifier changes activated only at epoch boundaries
+- Old and new verifier sets that jointly commit to the transition checkpoint
+- No batch that spans an implementation, policy, encoding, or decryption change
+- Two independent audits for changes to either proof relation
+- Permanent public test vectors and reproducible verifier builds
 
-If governance can bypass the advertised notice period and install arbitrary logic, the protected guarantee remains conditional on that governance. The UI and risk documentation must say so directly.
+Governance can make the protected guarantee conditional by bypassing the advertised notice period or installing arbitrary logic. The UI and risk documentation must state this condition directly.
 
 ---
 
@@ -1211,249 +1300,133 @@ Let `B` be an Ethereum-finalized protected Lighter batch. Under the assumptions 
 
 ### 19.1 Exact consumption
 
-Every logical protected item consumed by `B` corresponds to exactly one Lighter namespace position in the proved Continuum range. No additional protected item can affect the state transition.
+Every logical protected item that `B` consumes corresponds to exactly one Lighter namespace position in the proved Continuum range. No additional protected item can affect the state transition.
 
 ### 19.2 Order preservation
 
-If two protected Lighter items `a` and `b` have receipted positions `p_a < p_b`, and both are in the consumed range, Lighter processes `a` before `b`.
+Consider protected Lighter items `a` and `b` in the consumed range. For receipted positions `p_a < p_b`, Lighter processes `a` before `b`.
 
 ### 19.3 No silent omission
 
-Every Lighter namespace position in the consumed range contributes either an executable logical transaction or an objectively proven terminal invalid item. Availability failure prevents finalization.
+Every Lighter namespace position in a protected range contributes one item. It is an executable transaction or an objectively proved terminal no-op.
+
+Opening failure prevents protected finalization before the deterministic recovery freeze. Transcript data loss always prevents proof of the affected range.
 
 ### 19.4 Pre-content frame commitment
 
-The frame boundary, priority range, oracle root, protocol-event root, and execution eligibility delay are committed before any protected payload in the frame becomes usable by the sequencer.
+The system commits the frame boundary, priority range, oracle root, protocol-event root, and execution eligibility delay before the sequencer can use any payload.
 
 ### 19.5 Execution inheritance
 
-Because Lighter’s proof executes the exact derived stream, its existing price-time-priority, risk, liquidation, and state-transition guarantees apply to the Continuum-fixed order.
+Lighter’s proof executes the exact derived stream. Its existing price-time-priority, risk, liquidation, and state-transition guarantees apply to the Continuum-fixed order.
 
 ### 19.6 Receipt accountability
 
-A valid signed receipt inconsistent with the finalized receipt vector yields objective slash evidence and pauses later protected settlement.
+A valid signed receipt that conflicts with the finalized receipt vector provides objective slash evidence. It pauses later protected settlement.
 
 ### 19.7 Liveness containment
 
-A Continuum or solver failure can stop new protected settlement. It cannot authorize a conflicting Lighter state or block Lighter’s existing L1 safety and escape mechanisms.
+A Continuum or solver failure can stop new protected settlement. It cannot authorize a conflicting Lighter state. It also cannot block Lighter’s existing L1 safety and escape mechanisms.
 
 ---
 
-## 20. Performance budget and targets
+## 20. Performance activation conditions
 
-Lighter advertises tens of thousands of operations per second and millisecond engine latency. The integration must preserve that execution profile while adding a proof and opening pipeline outside the matching hot path.
+Lighter advertises tens of thousands of operations per second and millisecond engine latency. The integration must preserve that execution profile. It adds a proof and opening pipeline outside the matching hot path.
 
-Production targets are measured, not assumed:
+Activation requires published measurements for these criteria:
 
-| Metric | Capped beta gate | Full production gate |
+| Metric | Per-item profile | Full-scale profile |
 |---|---:|---:|
-| Sustained protected ingress | target workload + 2× headroom | Lighter peak + 2× headroom |
-| Receipt p99 | ≤ regional network budget + sub-ms service budget | same under target load |
-| Frame closure jitter | zero content-dependent cuts | deterministic replay equality |
-| Opening p99 | within protected-delay budget | within budget under adversarial withholding |
-| Sequence proof latency | below Lighter settlement interval | below interval at peak load |
-| Execution-proof overhead | measured versus unmodified prover | agreed maximum regression |
-| Ethereum verification | one sequence + one execution verification per settlement batch | recursion optional after cost study |
-| DA retrieval p99 | sufficient for independent proof generation | multi-provider SLA |
+| Sustained protected ingress | Target workload + 2× headroom | Lighter peak + 2× headroom |
+| Receipt p99 | ≤ regional network budget + sub-ms service budget | Same under target load |
+| Frame closure jitter | Zero content-dependent cuts | Deterministic replay equality |
+| Opening p99 | Within protected-delay budget | Within budget under adversarial withholding |
+| Sequence proof latency | Below Lighter settlement interval | Below interval at peak load |
+| Execution-proof overhead | Measured against the unmodified prover | Pinned maximum regression |
+| Ethereum verification | One sequence and one execution verification per settlement batch | Optional recursion under §13.6 |
+| DA retrieval p99 | Sufficient for independent proof generation | Multi-provider SLA |
 
-No per-segment proof is verified directly on Ethereum at a 25.6 ms cadence. The v1 demo measured a single native Wesolowski verification, which demonstrates feasibility of the primitive, not economic feasibility at segment frequency. Sequence proofs recursively aggregate many ticks and segments into one Lighter settlement certificate.
-
----
-
-## 21. Implementation plan
-
-### Phase 0 — Freeze the interface
-
-- Obtain Lighter’s exact current transaction codecs, block/batch public-input layout, prover fork, and verifier hashes.
-- Serialize every current Lighter transaction and choose envelope size classes.
-- Publish `DeploymentDomainV3`, `DerivedItemV3`, `ExecutionItemV3`, both stream roots, `SequencePublicV3`, and `C_bind` vectors.
-- Replace `bincode` and length-ambiguous Merkle trees in the consensus path.
-- Write the complete transaction failure-semantics table.
-
-**Exit:** Rust, Go, Python, circuit, and Solidity implementations produce identical vectors.
-
-### Phase 1 — Shadow feed
-
-- Run the protected SDK, Continuum receipts, fixed frames, permissionless opening, and deterministic adapter.
-- Execute against a Lighter state replica without affecting production settlement.
-- Compare native Lighter order with Continuum-derived order and measure latency, rejection, and solver load.
-
-**Label:** observable pilot, no validity-enforced fairness claim.
-
-### Phase 2 — Sequence proof
-
-- Implement the normative PoSq transition verifier.
-- Add durable tape/frame/opening APIs and persistent nullifier state.
-- Build `SequenceTransitionProof` and `ZK_FINALIZED` host state.
-- Prove typed resolution and receipt vectors.
-- Adversarially test false gaps, orphan receipts, cross-span duplicates, malformed openings, and DA withholding.
-
-**Exit:** independent replay and proof verification from the last accepted state.
-
-### Phase 3 — Lighter circuit and blob binding
-
-- Add the logical-input accumulator and typed terminal-invalid cycle.
-- Bind priority, oracle, protocol-event, and frame roots.
-- Enable the reserved blob-header word under a version bump.
-- Add `C_bind` through every recursive aggregation layer.
-- Implement `commitBatchV3` and `verifyBatchV3` on testnet.
-
-**Exit:** any mutation, deletion, insertion, duplicate, or reordering between proofs causes settlement rejection.
-
-### Phase 4 — Capped protected mainnet
-
-- Activate one domain and one protected policy with hard notional and throughput caps.
-- Use the measured per-item TLP profile only below its adversarial solver ceiling.
-- Fund the receipt-accountability bond above the maximum permitted value at risk per settlement frame.
-- Drill `SEQUENCE_STALLED`, `PRIORITY_ONLY`, receipt challenge, and Escape Hatch.
-
-**Exit:** sustained operation through the full proof and Ethereum finality path.
-
-### Phase 5 — Full-scale deployment
-
-- Activate only after a transparent batch-wave opening module or equivalent capacity passes the launch gate in §16.4.
-- Remove capped beta throughput limits gradually.
-- Evaluate recursive proof aggregation only after measuring parallel two-proof production.
+Ethereum does not verify a per-segment proof directly at a 25.6 ms cadence. Sequence proofs recursively aggregate many ticks and segments into one Lighter settlement certificate.
 
 ---
 
-## 22. Verification matrix
+## 21. Public conformance guarantees
 
-### 22.1 Encoding and cryptography
+V3.1 conformance requires every property in this section.
 
-- [ ] Canonical bytes for every object and transaction type.
-- [ ] Domain separation binds chain, contracts, implementation, verifier, epoch, namespace, policy, and decryption module.
-- [ ] Merkle roots bind list length.
-- [ ] ECDSA uses canonical low-`s`; Rust/Solidity/circuit signature behavior matches.
-- [ ] VDF/TLP challenge derivation and primality checks are identical across implementations.
-- [ ] Hash-to-field and `C_bind` serialization vectors cover boundary values.
+### 21.1 Encoding and cryptography
 
-### 22.2 Ordering
+- Canonical bytes cover every object and transaction type.
+- Domain separation binds chain, contracts, implementation, verifier, epoch, namespace, policy, and decryption module.
+- Merkle roots bind list length.
+- ECDSA uses canonical low-`s`.
+- Rust, Solidity, and circuit signature behavior matches.
+- VDF/TLP challenge derivation and primality verification are identical across implementations.
+- Hash-to-field and `C_bind` serialization vectors cover boundary values.
 
-- [ ] Receipt position is allocated atomically with ticket consumption.
-- [ ] Independent adapters replay byte-identical frame plans and streams.
-- [ ] Frame cuts remain identical under different plaintexts and execution costs.
-- [ ] Every Lighter namespace position in a range appears exactly once.
-- [ ] Cross-span duplicate and omitted receipt tests fail the proof.
-- [ ] Batch submission creates separate receipts unless the Lighter transaction is protocol-atomic.
+### 21.2 Ordering
 
-### 22.3 Opening
+- The system allocates receipt position atomically with ticket consumption.
+- Independent adapters replay byte-identical frame plans and streams.
+- Frame cuts remain identical under different plaintexts and execution costs.
+- Every Lighter namespace position in a range appears exactly once.
+- Cross-span duplicate and omitted receipt tests fail the proof.
+- Batch submission creates separate receipts unless the Lighter transaction is protocol-atomic.
 
-- [ ] Solve begins at receipt.
-- [ ] Order and frame close before maturity.
-- [ ] No unavailable opening can become a finalizable no-op.
-- [ ] Bad AEAD and bad encoding have unique objective predicates.
-- [ ] Adversarial withholding load fits the measured solver cap.
-- [ ] Two independent solver implementations agree on every vector.
+### 21.3 Opening
 
-### 22.4 Lighter execution
+- Solve begins at receipt.
+- Order and frame close before maturity.
+- No unavailable opening can become a finalizable no-op in `PROTECTED` mode.
+- A recovery cancellation covers only the deterministic frozen suffix from §9.2.
+- Bad AEAD and bad encoding have unique objective predicates.
+- Adversarial withholding load fits the measured solver cap.
+- Two independent solver implementations agree on every vector.
 
-- [ ] Every current transaction type is covered.
-- [ ] Signature, nonce, expiry, and stateful failure semantics match current protocol behavior or an explicitly versioned migration.
-- [ ] Logical transaction accumulator advances exactly once despite multi-cycle matching.
-- [ ] Rich and compact stream roots have a proved one-to-one mapping and identical declared count.
-- [ ] Priority operations advance in Ethereum request-ID order.
-- [ ] Discretionary protocol-created transaction paths are removed or sequenced.
-- [ ] Oracle and frame roots are committed before opening.
+### 21.4 Lighter execution
 
-### 22.5 Proof join and settlement
+- The transaction relation covers every supported transaction type.
+- Signature, nonce, expiry, and stateful failure semantics match protocol behavior or an explicitly versioned migration.
+- The logical transaction accumulator advances exactly once despite multi-cycle matching.
+- Rich and compact stream roots have a proved one-to-one mapping and identical declared count.
+- Priority operations advance in Ethereum request-ID order.
+- The protocol removes or sequences discretionary protocol-created transaction paths.
+- The protocol commits oracle and frame roots before opening.
 
-- [ ] `π_seq` alone cannot change Lighter state.
-- [ ] `π_exec` alone cannot settle a protected batch.
-- [ ] Both proofs agree on `execution_stream_root`, item count, and `C_bind`; the sequence proof additionally binds `ordered_item_root` into `C_bind`.
-- [ ] Cursor, transcript root, priority head, and state root advance atomically.
-- [ ] Overlapping, skipping, or cross-epoch certificates are rejected.
-- [ ] Only `ZK_FINALIZED` sequence state is accepted.
+### 21.5 Proof join and settlement
 
-### 22.6 Faults and recovery
+- Proof `π_seq` alone cannot change Lighter state.
+- Proof `π_exec` alone cannot settle a protected batch.
+- Both proofs agree on `execution_stream_root`, item count, and `C_bind`.
+- The sequence proof also binds `ordered_item_root` into `C_bind`.
+- Cursor, transcript root, priority head, and state root advance atomically.
+- The verifier rejects overlapping, skipping, or cross-epoch certificates.
+- Settlement accepts only `ZK_FINALIZED` sequence state.
 
-- [ ] Orphan receipt challenge slashes and pauses.
-- [ ] DA withholding stalls without corrupting state.
-- [ ] Continuum outage preserves priority cancel/exit.
-- [ ] No automatic unprotected downgrade exists.
-- [ ] Recovery begins at the last jointly verified head.
-- [ ] Escape Hatch works from the last finalized Lighter root with Continuum fully offline.
+### 21.6 Faults and recovery
 
----
-
-## 23. Production blockers in the current repository
-
-The following are deployment-blocking:
-
-1. The current transcript predicate does not fully verify receipt signatures, receipt-chain equality, one-receipt-per-entry, cross-span duplicates, openings, or terminal reasons.
-2. `PoSqHost.submitAnchor` does not make segment or transcript verification a state-transition condition.
-3. The host lacks strict anchor continuity and a proof-backed `ZK_FINALIZED` mode.
-4. Duplicate-last Merkle roots do not bind leaf count.
-5. `bincode` is used where a permanent multi-language consensus encoding is required.
-6. Ticket, capacity, and duplicate state are not sufficiently durable across restart.
-7. Cadence fencing does not consistently materialize position-preserving terminal entries.
-8. Per-ciphertext solving is linear in flow; current batch code aggregates proofs, not work.
-9. Solving starts too late relative to maturity and grace.
-10. Current local DA is not a production availability layer.
-11. The v1 bridge is demo-only and does not bind to a Lighter execution proof or state root.
-12. Lighter transaction-size coverage, exact transaction commitment, and failure semantics remain undisclosed or unmeasured.
-13. Lighter’s current verifier and upgrade-delay guarantees must be pinned from the live deployment.
+- An orphan-receipt challenge slashes and pauses.
+- DA withholding stalls without corrupting state.
+- A Continuum outage preserves priority cancel and exit operations.
+- No automatic unprotected downgrade exists.
+- Recovery begins at the last jointly verified head.
+- The Escape Hatch works from the last finalized Lighter root with Continuum fully offline.
 
 ---
 
-## 24. Changes from `lighter-integration-v1`
+## 22. Sources
 
-V3 keeps:
+### Continuum primary sources
 
-- the observation that Lighter’s order nonce makes input-stream binding the correct integration point;
-- encrypted, fixed-size Lighter transactions inside the Continuum tape;
-- deterministic frame replay;
-- separation of state-independent terminal invalidity from Lighter state-dependent rejection;
-- Lighter’s existing matching and execution circuits as the execution authority;
-- Ethereum as the joint settlement surface;
-- the L1 priority queue and Escape Hatch as the asset-safety backstop.
-
-V3 changes:
-
-1. The B3 public stream hash is replaced by a real `SequenceTransitionProof`.
-2. Optimistic stream challenges are removed from the production path.
-3. The sequence and execution proofs are joined atomically on `C_bind`.
-4. The existing 32-byte reserved Lighter blob word carries `C_bind` under a version bump.
-5. The derivation commits user, priority, oracle, frame, and protocol-event inputs.
-6. Frame boundaries are fixed before reveal.
-7. Lighter’s differential speed bumps are replaced by one uniform protected delay.
-8. The mandatory outer L1-wallet signature is removed.
-9. Consensus encoding is versioned and test-vector-defined; `bincode` is removed.
-10. Availability or solver failure stalls finality instead of becoming an omittable gap.
-11. Lighter’s existing priority queue becomes the single settlement-enforced force path.
-12. The system fails to priority-only mode, not unprotected trading.
-13. Per-item TLP is capped; full scale requires a real batch-wave opening module or an explicitly weaker threshold profile.
-14. PoSqHost gains a proof-backed `ZK_FINALIZED` state and exact continuity.
-15. Receipt-vector challenges cover orphan receipts outside the canonical proof.
-
----
-
-## 25. Required disclosures from Lighter
-
-Implementation cannot proceed beyond shadow mode without:
-
-1. the exact current logical L2 transaction codecs and maximum sizes;
-2. transaction-by-transaction signature, nonce, rejection, and retry semantics;
-3. the current transaction/public-input commitment structure;
-4. the exact Plonky2 fork, field/hash parameters, recursion layout, and verification keys;
-5. the final wrapper and Ethereum public-input serialization;
-6. the current blob serializer and versioning process;
-7. priority-operation types, deadlines, and circuit merge rules;
-8. oracle, block-time, pre-execution, liquidation, trigger, and TWAP scheduling rules;
-9. live proxy implementation, governance roles, and effective upgrade notice;
-10. proof-generation and settlement latency distributions under production load.
-
-Until these are available, constraint counts and latency effects are engineering estimates, not deployable parameters.
-
----
-
-## 26. Sources
+- [Continuum summary](https://docs.fermilabs.xyz/continuum/summary)
+- [Continuum architecture](https://docs.fermilabs.xyz/continuum/architecture)
 
 ### Lighter primary sources
 
 - [Technical Architecture: Lighter Core](https://docs.lighter.xyz/about-lighter/technical-architecture-lighter-core)
 - [Lighter Protocol whitepaper, October 2025](https://assets.lighter.xyz/whitepaper.pdf)
-- [Order Types & Matching](https://docs.lighter.xyz/trading/order-types-and-matching)
+- [Order Types & Matching](https://docs.lighter.xyz/perpetual-futures/orders-and-matching)
 - [Trading Fees and latency tiers](https://docs.lighter.xyz/trading/trading-fees)
 - [API account types](https://apidocs.lighter.xyz/docs/account-types)
 - [API keys and nonce behavior](https://apidocs.lighter.xyz/docs/api-keys)
@@ -1465,17 +1438,6 @@ Until these are available, constraint counts and latency effects are engineering
 - [zkSecurity block-circuit audit](https://1186887628-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FXuISSHTfjHCg60BNss6v%2Fuploads%2Fx29oIB5HInlZotXSFFdK%2F08-04-2025_Block_audit.pdf?alt=media)
 - [zkSecurity wrapper-circuit audit](https://1186887628-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FXuISSHTfjHCg60BNss6v%2Fuploads%2FP5Vou5dAIWFzkyW9TL31%2F10-10-2025_Wrapper_audit.pdf?alt=media)
 
-### Continuum repository sources
-
-- [`lighter-integration-v1` branch](https://github.com/cryptohariseldon/continuum-monorepo/tree/lighter-integration-v1)
-- [`integrations-v2/lighter-integration.md` on v1](https://github.com/cryptohariseldon/continuum-monorepo/blob/lighter-integration-v1/integrations-v2/lighter-integration.md)
-- [`docs3/07-integration-roadmaps.md`](https://github.com/cryptohariseldon/continuum-monorepo/blob/main/docs3/07-integration-roadmaps.md)
-- [`crates/sequencer/src/records.rs`](https://github.com/cryptohariseldon/continuum-monorepo/blob/main/crates/sequencer/src/records.rs)
-- [`crates/sequencer/src/transcript.rs`](https://github.com/cryptohariseldon/continuum-monorepo/blob/main/crates/sequencer/src/transcript.rs)
-- [`crates/sequencer/src/admission.rs`](https://github.com/cryptohariseldon/continuum-monorepo/blob/main/crates/sequencer/src/admission.rs)
-- [`crates/vdf/src/tlk.rs`](https://github.com/cryptohariseldon/continuum-monorepo/blob/main/crates/vdf/src/tlk.rs)
-- [`contracts/PoSqHost.sol`](https://github.com/cryptohariseldon/continuum-monorepo/blob/main/contracts/PoSqHost.sol)
-
 ### Cryptographic and Ethereum references
 
 - Boneh, Bonneau, Bünz, and Fisch, [Verifiable Delay Functions](https://eprint.iacr.org/2018/601)
@@ -1484,9 +1446,9 @@ Until these are available, constraint counts and latency effects are engineering
 
 ---
 
-## 27. Final specification statement
+## 23. Final specification statement
 
-A protected Lighter state transition is valid only if:
+A protected Lighter state transition is valid only under these conditions:
 
 ```text
 1. Continuum validity-proves the canonical encrypted admission transcript;
@@ -1496,4 +1458,4 @@ A protected Lighter state transition is valid only if:
 5. Ethereum advances the Lighter state and Continuum cursor atomically.
 ```
 
-This turns Lighter’s remaining sequencer discretion into a validity-proven input and completes the end-to-end settlement statement.
+This design turns Lighter’s remaining sequencer discretion into a validity-proven input. It completes the end-to-end settlement statement.

@@ -242,26 +242,37 @@ pub fn verify_sequence_transition(
             return Err(SequenceTransitionError::ResolutionBinding);
         }
 
-        let terminal = matches!(
-            item.derived.resolution,
-            ResolutionV3::BadAead | ResolutionV3::BadEncoding | ResolutionV3::L1Cancelled
-        );
-        if terminal {
-            if !item.execution.terminal_noop
-                || item.execution.tx_type != 0
-                || item.execution.tx_hash != [0; 5]
-                || item.execution.outcome_class != item.derived.resolution as u16
-                || item.derived.cleartext_length != 0
-                || item.derived.terminal_reason != item.execution.outcome_class
-            {
-                return Err(SequenceTransitionError::InvalidTerminalSemantics);
+        let valid_terminal_execution = item.execution.terminal_noop
+            && item.execution.tx_type == 0
+            && item.execution.tx_hash == [0; 5]
+            && item.execution.outcome_class == item.derived.resolution as u16
+            && item.derived.terminal_reason == item.execution.outcome_class;
+
+        match item.derived.resolution {
+            ResolutionV3::Clear => {
+                if item.execution.terminal_noop
+                    || item.execution.tx_type == 0
+                    || item.derived.cleartext_length == 0
+                    || item.derived.terminal_reason != 0
+                {
+                    return Err(SequenceTransitionError::InvalidTerminalSemantics);
+                }
             }
-        } else if item.execution.terminal_noop
-            || item.execution.tx_type == 0
-            || item.derived.cleartext_length == 0
-            || item.derived.terminal_reason != 0
-        {
-            return Err(SequenceTransitionError::InvalidTerminalSemantics);
+            ResolutionV3::BadEncoding => {
+                // The authenticator binds the exact recovered bytes and proves
+                // that the pinned parser rejects them.
+                if !valid_terminal_execution {
+                    return Err(SequenceTransitionError::InvalidTerminalSemantics);
+                }
+            }
+            ResolutionV3::BadAead | ResolutionV3::L1Cancelled => {
+                if !valid_terminal_execution
+                    || item.derived.cleartext_length != 0
+                    || item.derived.cleartext_hash != [0; 4]
+                {
+                    return Err(SequenceTransitionError::InvalidTerminalSemantics);
+                }
+            }
         }
 
         if item.execution.logical_index != logical_index as u64 {

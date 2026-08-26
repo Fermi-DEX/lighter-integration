@@ -9,6 +9,13 @@ fn h(byte: u8) -> [u8; 32] {
 }
 
 fn item(position: u32, resolution: ResolutionV3) -> DerivedItemV3 {
+    let (cleartext_length, cleartext_hash, terminal_reason) = match resolution {
+        ResolutionV3::Clear => (64, [11, 12, 13, 14], 0),
+        ResolutionV3::BadAead => (0, [0; 4], 1),
+        ResolutionV3::BadEncoding => (3, [11, 12, 13, 14], 2),
+        ResolutionV3::L1Cancelled => (0, [0; 4], 3),
+    };
+
     DerivedItemV3 {
         domain_hash: h(1),
         frame_id: 7,
@@ -18,17 +25,9 @@ fn item(position: u32, resolution: ResolutionV3) -> DerivedItemV3 {
         envelope_hash: h(position as u8),
         receipt_digest: h(9),
         resolution,
-        cleartext_length: if resolution == ResolutionV3::Clear {
-            64
-        } else {
-            0
-        },
-        cleartext_hash: [11, 12, 13, 14],
-        terminal_reason: if resolution == ResolutionV3::Clear {
-            0
-        } else {
-            1
-        },
+        cleartext_length,
+        cleartext_hash,
+        terminal_reason,
     }
 }
 

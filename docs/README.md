@@ -1,47 +1,74 @@
 # Documentation
 
-This repository is primarily a Lighter integration package. It also includes a functional Continuum runtime snapshot for the self-contained demo.
+An ordinary sequencer can read a transaction before it fixes that transaction's
+position. This information lets the sequencer choose among different valid
+orders.
 
-The runtime includes the VDF, timelock KEM, sequencer, receipts, transcript, and demo anchoring path. It is not the latest production Continuum kernel.
+Continuum is an ordering layer for encrypted transactions. Lighter is an
+exchange that proves the correctness of its state changes.
 
-## Repository boundary
+The proof-backed design fixes an encrypted Lighter transaction before reveal.
+A sequence proof then binds that protected order to Lighter's execution proof
+at settlement.
 
-| Area | Included now | Boundary |
-|---|---|---|
-| Lighter integration | Binding types, stream roots, `C_bind`, host transition verification, settlement join, and a pinned prover overlay | The full Lighter heavy and light circuit wiring remains joint work |
-| VDF kernel | RSA-2048 repeated squaring and Wesolowski proof generation and verification | The default modulus is a challenge-modulus placeholder |
-| Timelock kernel | Solve-only KEM, public opening, AEAD protection, and aggregated wave proofs | Each ciphertext still needs an independent sequential solve chain |
-| Continuum sequencer | Admission, signed receipts, work-defined ticks, transcript records, local storage, anchors, and fraud evidence | This code is the V1 demo snapshot, not the latest production kernel |
-| Demo bridge | Embedded sequencer, simulated Lighter order book, browser verification, scenarios, and optional Sepolia posting | The demo does not verify real Lighter execution proofs |
-| Sequence validity | A tested host relation and public input model | The recursive `SequenceTransitionProof` SNARK does not exist yet |
-| Settlement | A tested Rust join and Solidity reference contract | Real Lighter verifiers, custody, blob, governance, and escape-path wiring remain open |
+The browser demonstration shows encrypted admission, opening, and optimistic
+span settlement. Separate proof tests exercise the atomic proof join.
 
-The generic optimization and FPGA modules in `crates/vdf` are experiments. This documentation does not treat those modules as production guarantees.
+Start with [Fair ordering basics](./fair-ordering-basics.md). It uses two
+competing orders to explain the complete path without proof-system background.
 
-## Start here
+## System in one view
 
-| Document | Purpose |
+The proof-backed design uses these steps:
+
+1. A client signs a normal Lighter transaction.
+2. The client submits that transaction inside a fixed-size encrypted envelope.
+3. Continuum assigns a transcript position and returns a signed receipt.
+4. Sequential work opens the envelope after the position becomes fixed.
+5. A sequence proof derives the exact ordered Lighter stream.
+6. Lighter executes that stream and proves its state transition.
+7. Both proofs must expose equal `C_bind` values before settlement accepts them.
+
+The sequence proof establishes protected order. Lighter remains the authority
+for signatures, nonces, risk rules, matching, liquidations, and state changes.
+
+## Core concepts
+
+| Concept | Meaning |
 |---|---|
-| [Design goals](./design-goals.md) | The intended system boundary and proof architecture |
-| [Full functionality](./functionality.md) | Current code, test surfaces, run modes, and missing production work |
-| [Security, verifiability, and economic guarantees](./security-verifiability-and-economic-guarantees.md) | Conditional claims, assumptions, limits, and failure behavior |
-| [Lighter integration specification v3.1](./lighter-integration-spec-v3.md) | The detailed target protocol and normative proof relations |
-| [Lighter team test runbook](./team-test-runbook.md) | Reproducible commands for the extracted repository and pinned overlays |
-| [Improvement roadmap](../lit_improvement_roadmap.md) | Completion verdict, prover efficiency plan, recursion policy, and pitch gates |
+| Fair ordering | The system fixes protected positions before transaction reveal |
+| Envelope | A fixed-size encrypted container for one signed Lighter transaction |
+| Receipt | Continuum's signed commitment to an envelope position |
+| Timelock | Delayed decryption based on sequential work |
+| VDF | Verifiable sequential progress for the Continuum transcript |
+| Sequence proof | Proof that one contiguous transcript range derives an exact ordered stream |
+| Execution proof | Lighter's proof that it executed the chosen stream correctly |
+| `C_bind` | One commitment that links the two proof statements and their batch context |
+| Atomic settlement | A state update that advances both linked heads or neither head |
+| Recovery lane | Lighter priority operations and asset recovery during protected-service failure |
 
-## Version labels
+## Read in this order
 
-`V1` identifies the preserved demo runtime and its optimistic bridge. `V3.1` identifies the target validity-enforced integration design.
-
-The two versions coexist for a reason. V1 gives the teams a runnable bridge and visual review surface. V3.1 defines the production security boundary.
-
-Files under `integrations-v2` and `demo/EXECUTIVE-BRIEF.md` record historical design work. They do not override the V3.1 specification or this status summary.
-
-## Status terms
-
-| Term | Meaning |
+| Document | What it explains |
 |---|---|
-| Runnable | The repository contains an executable path with tests |
-| Tested reference | Tests cover the relation, but no production verifier enforces it |
-| Pinned overlay | A patch applies to one exact upstream revision |
-| Target | The specification defines the behavior, but the implementation remains incomplete |
+| [Fair ordering basics](./fair-ordering-basics.md) | The problem, a two-order example, user flow, proof roles, and glossary |
+| [Design goals](./design-goals.md) | The security boundary and the reasons for each design choice |
+| [How the integration works](./functionality.md) | Encrypted admission, timed opening, both proofs, atomic settlement, and recovery |
+| [Security, verifiability, and economic guarantees](./security-verifiability-and-economic-guarantees.md) | Exact guarantees, assumptions, failure behavior, and economic limits |
+| [Lighter integration specification](./lighter-integration-spec-v3.md) | Canonical data, proof relations, public inputs, state transitions, and settlement rules |
+| [Verification guide](./team-test-runbook.md) | Exact commands and the meaning of each green test |
+
+## How the pieces fit
+
+Continuum owns the ordering statement. Its proof derives one compact execution
+stream from verified receipts, timelock openings, and transcript continuity.
+
+Lighter owns the execution statement. Its proof applies exchange rules to that
+same compact stream and computes the matching ordered root.
+
+`C_bind` links the two statements to one count, state transition, and batch
+context. Settlement verifies both proofs and advances both state heads
+atomically.
+
+During a protected-service failure, priority operations and the Escape Hatch
+provide the recovery path.

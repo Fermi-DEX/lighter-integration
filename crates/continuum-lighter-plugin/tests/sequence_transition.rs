@@ -184,6 +184,37 @@ fn fixture() -> (SequenceTransitionPublicV3, SequenceTransitionWitnessV3) {
     )
 }
 
+fn refresh_binding(
+    public: &mut SequenceTransitionPublicV3,
+    witness: &SequenceTransitionWitnessV3,
+) {
+    let hasher = Sha256ReferenceHasher;
+    let derived: Vec<_> = witness
+        .resolved_items
+        .iter()
+        .map(|item| item.derived.clone())
+        .collect();
+    let execution: Vec<_> = witness
+        .resolved_items
+        .iter()
+        .map(|item| item.execution.clone())
+        .collect();
+    public.binding.ordered_item_root = compute_ordered_item_root(
+        &hasher,
+        public.old_state.domain_hash,
+        derived[0].frame_id,
+        public.old_state.global_cursor,
+        &derived,
+    );
+    public.binding.execution_stream_root = compute_execution_stream_root(
+        &hasher,
+        public.old_state.domain_hash,
+        public.old_state.global_cursor,
+        &execution,
+    );
+    public.c_bind = compute_c_bind(&hasher, &public.binding);
+}
+
 #[test]
 fn valid_transition_passes() {
     let (public, witness) = fixture();
@@ -248,6 +279,34 @@ fn execution_stream_mutation_is_rejected() {
 fn terminal_item_cannot_smuggle_a_transaction_hash() {
     let (public, mut witness) = fixture();
     witness.resolved_items[1].execution.tx_hash[0] = 1;
+    assert_eq!(
+        verify_sequence_transition(&Sha256ReferenceHasher, &Auth, &public, &witness),
+        Err(SequenceTransitionError::InvalidTerminalSemantics)
+    );
+}
+
+#[test]
+fn bad_encoding_binds_recovered_bytes() {
+    let (mut public, mut witness) = fixture();
+    let item = &mut witness.resolved_items[1];
+    item.derived.resolution = ResolutionV3::BadEncoding;
+    item.derived.cleartext_length = 3;
+    item.derived.cleartext_hash = [10, 11, 12, 13];
+    item.derived.terminal_reason = 2;
+    item.execution.outcome_class = 2;
+    refresh_binding(&mut public, &witness);
+
+    assert_eq!(
+        verify_sequence_transition(&Sha256ReferenceHasher, &Auth, &public, &witness),
+        Ok(())
+    );
+}
+
+#[test]
+fn bad_aead_rejects_nonzero_cleartext_hash() {
+    let (public, mut witness) = fixture();
+    witness.resolved_items[1].derived.cleartext_hash[0] = 1;
+
     assert_eq!(
         verify_sequence_transition(&Sha256ReferenceHasher, &Auth, &public, &witness),
         Err(SequenceTransitionError::InvalidTerminalSemantics)

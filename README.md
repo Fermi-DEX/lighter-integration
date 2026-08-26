@@ -1,56 +1,124 @@
 # Continuum × Lighter integration
 
-A self-contained extraction of the Lighter-specific Continuum work. This is
-primarily a Lighter integration package. It also embeds the functional V1
-Continuum VDF, timelock, and sequencer runtime required by the demo.
+The Continuum × Lighter protocol is designed to give Lighter a protected order
+that users and contracts can verify. It fixes encrypted Lighter transactions
+before reveal and binds that order to Lighter's validity-proven execution.
 
-The embedded runtime is not the latest production Continuum kernel. The
-runnable V1 bridge, production-facing Rust plugin, and proof design provide a
-complete review and team-test surface.
+Start with [Fair ordering basics](./docs/fair-ordering-basics.md) for one
+concrete example and the full user-to-settlement flow.
 
-## Status
+## Why this integration exists
 
-- **Demo-complete:** the preserved V1 bridge embeds the Continuum sequencer,
-  drives a Lighter-style order book, exposes a self-verifying browser UI, and
-  includes Sepolia-oriented contracts and adversarial tests.
-- **Team-test ready:** V3.1 types, the structural sequence transition,
-  field-native Poseidon2 stream folding, dual-root `C_bind`, and the atomic
-  two-proof join have standalone Rust and Solidity implementations with
-  adversarial tests.
-- **Pinned upstream overlay included:** an apply-ready patch adds the exact
-  one-Poseidon-per-item gadget to Lighter's pinned prover and CI compiles its
-  native mutation test.
-- **Not production-complete:** the overlay still must be threaded through
-  Lighter's heavy/light `JumpState`, terminal selector, batch/wrapper public
-  inputs, and versioned blob word. The recursive sequence SNARK, production
-  DA, live verifier pins, and measured prover deltas remain joint work.
+An ordinary sequencer can read a signed transaction before it fixes that
+transaction's position. It can then use the trader, price, size, or order type
+to choose a different valid order.
 
-The detailed verdict, efficient prover design, recursive option, test matrix,
-and pitch gate are in [`lit_improvement_roadmap.md`](./lit_improvement_roadmap.md).
-The normative protocol draft is in
-[`docs/lighter-integration-spec-v3.md`](./docs/lighter-integration-spec-v3.md).
-Start with the [`docs` index](./docs/README.md) for the scope, design goals,
-full functionality, and conditional guarantees.
+Lighter proves that its exchange executes a chosen stream correctly. Its proof
+covers signatures, nonces, risk rules, matching, and state changes. That proof
+alone does not prove fair selection of the input stream.
 
-## Repository layout
+Continuum accepts each protected transaction as a fixed-size encrypted
+envelope. A signed receipt fixes the envelope's transcript position before the
+timelock reveals its contents.
+
+A sequence proof derives the exact ordered Lighter stream from the Continuum
+transcript. The Lighter execution proof commits to the same stream. Both
+proofs must expose the same `C_bind` before Ethereum settlement accepts the
+batch.
+
+## Proof-backed transaction flow
+
+The proof-backed design uses this flow:
+
+1. The client signs an ordinary Lighter transaction.
+2. The client pads and encrypts the transaction into a Continuum envelope.
+3. Continuum fixes the hidden envelope's position and returns a signed receipt.
+4. Public solvers complete the timelock work and reveal the signed transaction.
+5. The sequence proof derives the exact protected input stream.
+6. Lighter executes that stream and proves the resulting state transition.
+7. Settlement verifies both proofs, compares `C_bind`, and advances both state
+   heads atomically.
+
+Lighter remains the execution authority. Continuum proves protected order, but
+Lighter still applies every signature, nonce, margin, matching, and liquidation
+rule.
+
+## How the two proofs meet
+
+In the protocol design, the sequence proof reads one contiguous Continuum
+transcript range. It verifies receipts, timelock openings, terminal outcomes,
+counts, and continuity.
+
+That proof computes a rich evidence root and a compact execution root. It
+proves that each compact item comes from exactly one verified transcript
+position.
+
+The Lighter proof executes the compact stream. It computes the same root while
+it applies Lighter's existing exchange rules.
+
+`C_bind` commits to both roots, the item count, state continuity, and batch
+context. Settlement compares `C_bind` from the sequence proof, Lighter proof,
+and versioned blob.
+
+Both state heads advance only after both proofs pass. Any root, count, cursor,
+or `C_bind` mismatch rejects the entire update.
+
+## Why the Lighter hot path stays small
+
+The design assigns receipts, RSA relations, VDF progress, timelock openings,
+transcript continuity, and data commitments to the separate sequence proof.
+
+The Lighter circuit adds one field-native Poseidon2 accumulator step for each
+logical input. It reuses Lighter's existing five-field transaction hash.
+
+This split keeps non-native cryptography outside Lighter's transaction circuit.
+It also preserves parallel proving for heavy transactions, light transactions,
+and the sequence relation.
+
+## How recovery works
+
+The protocol requires both valid proofs for a protected batch. Missing opening
+data or failed solver work stalls protected finality instead of creating a
+silent gap.
+
+`BAD_AEAD` and `BAD_ENCODING` are protected terminal outcomes. A deterministic
+`L1_CANCELLED` no-op resolves a complete frozen suffix during recovery.
+
+Settlement fixes the suffix at a public fault deadline. Cancellation cannot
+select individual positions, and it activates the fault penalty.
+
+Lighter's priority queue remains available for forced operations. During a
+Continuum outage, priority-only operation and the Escape Hatch preserve the
+asset-recovery path.
+
+The protected guarantee starts after receipt issuance. It does not guarantee
+equal network latency or prevent censorship before a receipt exists.
+
+## Learn the system
+
+1. Read [Fair ordering basics](./docs/fair-ordering-basics.md).
+2. Review the [design goals](./docs/design-goals.md).
+3. Read [how the integration works](./docs/functionality.md).
+4. Read the [security, verifiability, and economic guarantees](./docs/security-verifiability-and-economic-guarantees.md).
+5. Use the [technical specification](./docs/lighter-integration-spec-v3.md) for
+   exact proof relations.
+6. Run the [verification guide](./docs/team-test-runbook.md).
+
+## System components
 
 | Path | Purpose |
 |---|---|
 | `crates/continuum-lighter-plugin` | Standalone V3 binding and proof-join reference API |
-| `crates/sequencer`, `crates/vdf` | Exact runtime support required by the preserved V1 demo |
-| `demo` | Runnable V1 bridge, dashboard, bots, scenarios, and Solidity tests |
-| `contracts/production` | Reference atomic settlement join; not a deployed Lighter patch |
+| `crates/sequencer`, `crates/vdf` | Embedded Continuum V1 runtime for the interactive demo. Production deployments use the current Continuum kernel |
+| `demo` | Browser journey, simulated Lighter order book, bots, scenarios, and Solidity tests |
+| `contracts/production` | Reference atomic settlement join |
 | `patches/lighter-prover` | Apply-ready accumulator overlay for the pinned Lighter prover |
-| `integrations-v2` | Historical V1/V2 design material |
-| `docs/README.md` | Documentation map and repository boundary |
-| `docs/design-goals.md` | Design goals and non-goals |
-| `docs/functionality.md` | Full current functionality and production gaps |
-| `docs/security-verifiability-and-economic-guarantees.md` | Security assumptions and conditional guarantees |
-| `docs/lighter-integration-spec-v3.md` | Current production design |
-| `docs/team-test-runbook.md` | Reproducible review and test sequence for both teams |
+| `docs` | Newcomer guide, proof design, guarantees, specification, and verification guide |
 | `upstream` | Pinned upstream revisions and precise Lighter prover integration map |
 
-## Local checks
+## Local verification
+
+Run these commands from the repository root:
 
 ```bash
 cargo test -p continuum-lighter-plugin
@@ -60,14 +128,16 @@ cd demo/contracts && forge test
 cd ../../contracts/production && forge test
 ```
 
-The plugin's `Sha256ReferenceHasher` exists only for deterministic host tests.
-The `lighter-poseidon2` feature uses the exact pinned Lighter Plonky2 fork and
-field-native execution preimages; it is the review/reference implementation
-for production vectors.
+A green run verifies the extracted Rust relations, exact pinned Poseidon2
+adapter, demo gateway, and Solidity reference contracts.
+
+The plugin uses `Sha256ReferenceHasher` only for deterministic host tests. The
+`lighter-poseidon2` feature uses the exact pinned Lighter Plonky2 fork and
+field-native execution preimages.
 
 ## License
 
 Fermi-owned material without a different notice uses the
 [Business Source License 1.1](./licence.md). The VDF crate, MIT-tagged Solidity,
-the Lighter overlay, dependencies, and vendored material keep their stated
+Lighter overlay, dependencies, and vendored material retain their stated
 licenses.
