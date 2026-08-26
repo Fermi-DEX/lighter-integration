@@ -42,6 +42,9 @@ no-ops, duplicate receipts, duplicate envelopes, and cursor and configuration
 continuity. They also cover both stream roots, `C_bind`, and an end-to-end
 sequence-to-settlement mutation.
 
+They also cover canonical malformed-payload fields. `BAD_ENCODING` binds
+recovered bytes. `BAD_AEAD` rejects every nonzero cleartext hash.
+
 Generic CI ignores the inherited `test_performance_improvement` VDF wall-clock
 test. Its 100 ms threshold depends on the runner class.
 
