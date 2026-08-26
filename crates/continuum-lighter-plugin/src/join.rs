@@ -85,8 +85,7 @@ pub fn advance_head(
     if exec.verifier_id != head.execution_verifier_id {
         return Err(JoinError::ExecutionVerifier);
     }
-    if seq.old_global_cursor != head.global_cursor
-        || seq.new_global_cursor <= seq.old_global_cursor
+    if seq.old_global_cursor != head.global_cursor || seq.new_global_cursor <= seq.old_global_cursor
     {
         return Err(JoinError::CursorContinuity);
     }

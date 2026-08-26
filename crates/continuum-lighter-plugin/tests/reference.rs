@@ -18,9 +18,17 @@ fn item(position: u32, resolution: ResolutionV3) -> DerivedItemV3 {
         envelope_hash: h(position as u8),
         receipt_digest: h(9),
         resolution,
-        cleartext_length: if resolution == ResolutionV3::Clear { 64 } else { 0 },
+        cleartext_length: if resolution == ResolutionV3::Clear {
+            64
+        } else {
+            0
+        },
         cleartext_hash: [11, 12, 13, 14],
-        terminal_reason: if resolution == ResolutionV3::Clear { 0 } else { 1 },
+        terminal_reason: if resolution == ResolutionV3::Clear {
+            0
+        } else {
+            1
+        },
     }
 }
 
@@ -29,8 +37,7 @@ fn ordering_mutations_change_the_root() {
     let hasher = Sha256ReferenceHasher;
     let a = item(0, ResolutionV3::Clear);
     let b = item(1, ResolutionV3::BadEncoding);
-    let ordered =
-        compute_ordered_item_root(&hasher, h(1), 7, 0, &[a.clone(), b.clone()]);
+    let ordered = compute_ordered_item_root(&hasher, h(1), 7, 0, &[a.clone(), b.clone()]);
     let reordered = compute_ordered_item_root(&hasher, h(1), 7, 0, &[b, a]);
     assert_ne!(ordered, reordered);
 }
@@ -132,10 +139,7 @@ fn terminal_items_are_not_gaps() {
         h(1),
         7,
         0,
-        &[
-            item(0, ResolutionV3::Clear),
-            item(1, ResolutionV3::BadAead),
-        ],
+        &[item(0, ResolutionV3::Clear), item(1, ResolutionV3::BadAead)],
     );
     assert_ne!(clear_only, with_terminal);
 }

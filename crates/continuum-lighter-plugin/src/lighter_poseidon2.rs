@@ -33,8 +33,7 @@ impl LighterPoseidon2Hasher {
     fn serialize(hash: HashOut<GoldilocksField>) -> Hash32 {
         let mut out = [0u8; 32];
         for (index, limb) in hash.elements.iter().enumerate() {
-            out[index * 8..(index + 1) * 8]
-                .copy_from_slice(&limb.to_canonical_u64().to_be_bytes());
+            out[index * 8..(index + 1) * 8].copy_from_slice(&limb.to_canonical_u64().to_be_bytes());
         }
         out
     }
@@ -42,7 +41,8 @@ impl LighterPoseidon2Hasher {
 
 impl LighterNativeHash for LighterPoseidon2Hasher {
     fn hash(&self, domain: &'static [u8], payload: &[u8]) -> Hash32 {
-        let mut fields = Vec::with_capacity(2 + domain.len().div_ceil(4) + payload.len().div_ceil(4));
+        let mut fields =
+            Vec::with_capacity(2 + domain.len().div_ceil(4) + payload.len().div_ceil(4));
         Self::pack_bytes(domain, &mut fields);
         Self::pack_bytes(payload, &mut fields);
         Self::serialize(Poseidon2Hash::hash_no_pad(&fields))

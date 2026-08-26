@@ -1,9 +1,9 @@
 use continuum_lighter_plugin::{
     advance_head, compute_c_bind, compute_execution_stream_root, compute_ordered_item_root,
-    verify_sequence_transition, BindingInputsV3, DerivedItemV3, ExecutionItemV3,
-    ExecutionPublicV3, JoinError, ReceiptV3, ResolvedItemV3, ResolutionV3, SequenceStateV3,
-    SequenceTransitionError, SequenceTransitionPublicV3, SequenceTransitionWitnessV3,
-    SettlementHeadV3, Sha256ReferenceHasher, TransitionAuthenticator,
+    verify_sequence_transition, BindingInputsV3, DerivedItemV3, ExecutionItemV3, ExecutionPublicV3,
+    JoinError, ReceiptV3, ResolutionV3, ResolvedItemV3, SequenceStateV3, SequenceTransitionError,
+    SequenceTransitionPublicV3, SequenceTransitionWitnessV3, SettlementHeadV3,
+    Sha256ReferenceHasher, TransitionAuthenticator,
 };
 
 fn h(byte: u8) -> [u8; 32] {
@@ -43,10 +43,7 @@ impl TransitionAuthenticator for Auth {
     }
 }
 
-fn fixture() -> (
-    SequenceTransitionPublicV3,
-    SequenceTransitionWitnessV3,
-) {
+fn fixture() -> (SequenceTransitionPublicV3, SequenceTransitionWitnessV3) {
     let receipts = vec![
         ReceiptV3 {
             epoch: 4,

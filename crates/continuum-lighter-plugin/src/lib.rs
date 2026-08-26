@@ -20,9 +20,9 @@ pub use binding::{
     compute_c_bind, compute_execution_stream_root, compute_ordered_item_root, BindingInputsV3,
 };
 pub use hash::{LighterNativeHash, Sha256ReferenceHasher};
+pub use join::{advance_head, ExecutionPublicV3, JoinError, SequencePublicV3, SettlementHeadV3};
 #[cfg(feature = "lighter-poseidon2")]
 pub use lighter_poseidon2::LighterPoseidon2Hasher;
-pub use join::{advance_head, ExecutionPublicV3, JoinError, SequencePublicV3, SettlementHeadV3};
 pub use sequence::{
     verify_sequence_transition, ReceiptV3, ResolvedItemV3, SequenceStateV3,
     SequenceTransitionError, SequenceTransitionPublicV3, SequenceTransitionWitnessV3,

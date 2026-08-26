@@ -28,7 +28,13 @@ pub fn put_lighter_hash(out: &mut Vec<u8>, value: &[u64; 4]) {
 }
 
 pub fn put_bytes(out: &mut Vec<u8>, value: &[u8]) {
-    put_u32(out, value.len().try_into().expect("canonical byte string exceeds u32"));
+    put_u32(
+        out,
+        value
+            .len()
+            .try_into()
+            .expect("canonical byte string exceeds u32"),
+    );
     out.extend_from_slice(value);
 }
 

@@ -46,6 +46,8 @@ step; only the 64-bit logical index is split into two 32-bit limbs.
 ## 4. Atomic settlement tests
 
 ```bash
+(cd demo/contracts && \
+  forge install foundry-rs/forge-std@v1.9.7 --no-git --shallow)
 (cd demo/contracts && forge test)
 (cd contracts/production && forge test)
 ```
