@@ -193,6 +193,7 @@ mod tests {
     }
     
     #[test]
+    #[ignore = "timing-sensitive microbenchmark; run on pinned benchmark hardware"]
     fn test_performance_improvement() {
         use std::time::Instant;
         

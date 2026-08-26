@@ -29,6 +29,14 @@ The plugin tests cover canonical ordering, exact logical counts, terminal
 no-ops, receipt and envelope duplication, cursor/config continuity, both
 stream roots, `C_bind`, and an end-to-end sequence-to-settlement mutation.
 
+The inherited `test_performance_improvement` VDF wall-clock check is ignored in
+generic CI because its 100 ms threshold depends on runner class. Run it only on
+the pinned benchmark host with:
+
+```bash
+cargo test -p vdf test_performance_improvement -- --ignored
+```
+
 ## 3. Exact Lighter Poseidon2 adapter
 
 ```bash
