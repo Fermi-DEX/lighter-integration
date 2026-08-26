@@ -31,7 +31,7 @@ receipts.
 The envelopes open after those positions become fixed. The ordered-input
 accumulator and `C_bind` join bind Alice's order before Bob's order.
 
-Lighter's normal matching proof then applies its execution rules to that bound
+Lighter's usual matching proof then applies its execution rules to that ordered
 stream.
 
 This guarantee starts with receipt issuance. It does not prove who first sent
