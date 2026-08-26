@@ -119,8 +119,9 @@ demo/
 ```
 
 The sequencer, VDF, timelock KEM, records, anchors, fraud proofs, and
-`PoSqHost.sol` are the **existing repository implementation** — the demo embeds
-them, it does not reimplement them. Nothing on the dashboard is mocked.
+`PoSqHost.sol` are the **existing repository implementation**. The demo embeds
+them. The Lighter execution path is a simulated price-time order book, and the
+dashboard labels it as a demonstration surface.
 
 ---
 

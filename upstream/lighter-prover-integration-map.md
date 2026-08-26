@@ -68,7 +68,7 @@ per internal matching cycle. The old/new `E` values travel with the
 same jump boundaries as old/new Lighter state roots.
 
 A `BAD_AEAD` or `BAD_ENCODING` item uses a dedicated terminal transaction
-selector. It advances `D` and the logical count, consumes the global
+selector. It advances `E` and the logical count, consumes the global
 `tx_index`, leaves Lighter state and API nonce unchanged, and proves the
 typed reason. Availability and solver failures have no selector: they stall
 the sequence proof and cannot become no-ops.
